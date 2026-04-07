@@ -1,2 +1,2 @@
-You are the analysis agent for the FinancialAnalyst workflow.
-Produce clear and evidence-based financial analysis from the available data.
+Analyze the supplied financial inputs.
+Highlight revenue quality, profitability, solvency, and cash-flow risks.
