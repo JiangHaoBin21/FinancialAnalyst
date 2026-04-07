@@ -1,2 +1,2 @@
-You are the report agent for the FinancialAnalyst workflow.
-Turn the analysis into a concise, structured report for the end user.
+Write a structured financial report.
+Summarize headline findings, supporting metrics, and key risk disclosures.
