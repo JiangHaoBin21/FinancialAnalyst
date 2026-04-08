@@ -27,3 +27,5 @@ class Settings:
 
         if missing:
             raise ValueError(f"缺少必要环境变量: {', '.join(missing)}")
+
+settings = Settings()

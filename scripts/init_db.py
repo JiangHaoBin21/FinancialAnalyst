@@ -1,10 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 """初始化数据库."""
 from sqlalchemy import create_engine, text
+from app.core.config import settings
 
-DATABASE_URL = "postgresql://admin:admin123@localhost:5432/finance_db"
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(settings.database_url)
 
 create_table_statements = [
     """

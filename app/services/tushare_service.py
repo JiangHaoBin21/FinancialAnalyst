@@ -15,13 +15,13 @@ from typing import Any, Optional
 
 import pandas as pd
 import tushare as ts
-from app.core.config import Settings
+from app.core.config import settings
 
 
 @dataclass
 class TushareServiceConfig:
     """TuShare 服务配置"""
-    token: str = Settings.TuShare_Token
+    token: str
 
 
 class TushareService:
@@ -650,3 +650,9 @@ class TushareService:
             period=period,
         )
         return self.normalize_fina_indicator(df)
+
+if __name__ == "__main__":
+    config = TushareServiceConfig(token=settings.TuShare_Token)
+    print(type(config),config)
+    pro = TushareService(config)
+    print(pro.get_company_records(),len(pro.get_company_records()))

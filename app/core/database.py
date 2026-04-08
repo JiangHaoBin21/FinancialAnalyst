@@ -6,10 +6,10 @@ from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-from app.core.config import Settings
+from app.core.config import settings
 
 engine = create_engine(
-    Settings.database_url,
+    settings.database_url,
     echo=False,
     future=True,
     pool_pre_ping=True,
