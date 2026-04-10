@@ -1,5 +1,5 @@
 from app.llms.openai_client import OpenAIClient
-from app.skills.planning_skills import PlanningSkill
+from app.skills.planning.planning_skill import PlanningSkill
 
 
 def test_planner():
@@ -8,7 +8,7 @@ def test_planner():
 
     test_cases = [
         # 1. 正常财务分析
-        "帮我分析一下宁德时代近三年的财务表现",
+        "帮我分析一下宁德时代近五年的财务表现",
 
         # # 2. 用 ts_code
         # "分析 000001.SZ 最近三年的财务情况",
@@ -39,7 +39,6 @@ def test_planner():
         print("time_range:", result.time_range)
         print("needs_user_input:", result.needs_user_input)
         print("missing_fields:", result.missing_fields)
-        print("next_step:", result.next_step)
 
         print("\n--- task_plan ---")
         for step in result.task_plan:
@@ -49,8 +48,8 @@ def test_planner():
         print(result.planner_message)
 
         print("\n--- raw_response ---")
-        print(result.raw_response[:300], "...")  # 防止太长
-        # print(result.raw_response)
+        # print(result.raw_response[:300], "...")  # 防止太长
+        print(result.raw_response)
 
 
 if __name__ == "__main__":

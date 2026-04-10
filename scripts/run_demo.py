@@ -5,7 +5,7 @@ from app.agents.data_agent import DataAgent
 from app.agents.analysis_agent import AnalysisAgent
 from app.agents.report_agent import ReportAgent
 from app.agents.reflection_agent import ReflectionAgent
-from app.skills.planning_skills import PlanningSkill
+from app.skills.planning.planning_skill import PlanningSkill
 from app.llms.openai_client import OpenAIClient
 
 
@@ -28,7 +28,7 @@ def main():
         enable_trace=True,
     )
 
-    state = graph.run("请分析贵州茅台近三年的财务表现，并生成一份报告")
+    state = graph.run("请分析财务表现")
 
     print("\n===== FINAL STATUS =====")
     print(state.status)
