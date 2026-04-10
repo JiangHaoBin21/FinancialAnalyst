@@ -25,10 +25,10 @@ class OpenAIClientConfig:
     - base_url: 可选，自定义兼容 OpenAI 的服务地址
     - timeout: 请求超时时间（秒）
     """
-    api_key: str = settings.OPENAI_API_KEY
-    model: str = settings.OPENAI_MODEL
-    base_url: Optional[str] = getattr(settings, "OPENAI_BASE_URL", None)
-    timeout: float = getattr(settings, "OPENAI_TIMEOUT", 60.0)
+    api_key: str = settings.deepseek_api_key
+    model: str = settings.deepseek_model_name
+    base_url: Optional[str] = getattr(settings, "deepseek_base_url", None)
+    timeout: float = getattr(settings, "DEEPSEEK_TIMEOUT", 60.0)
 
 
 class OpenAIClient(BaseLLMClient):

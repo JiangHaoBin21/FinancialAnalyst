@@ -16,6 +16,9 @@ class Settings:
     environment: str = "development"
     database_url: str = os.getenv("DATABASE_URL")
     TuShare_Token: str = os.getenv("TUSHARE_TOKEN")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY")
+    deepseek_model_name: str = os.getenv("DEEPSEEK_MODEL_NAME")
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL")
 
     def validate(self) -> None:
         missing = []
