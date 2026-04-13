@@ -1,4 +1,4 @@
-"""planning_skills数据结构"""
+"""定义所有使用的数据结构"""
 
 from dataclasses import dataclass, field
 from typing import Any, Optional

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.skills.planning.planning_skill import PlanningSkill
-from app.domain.planning_models import PlanningResult, PlanningStep as SkillPlanningStep
+from app.domain.models import PlanningResult, PlanningStep as SkillPlanningStep
 from app.workflows.state import (
     WorkflowState,
     TaskType,
@@ -63,6 +63,13 @@ class SupervisorAgent:
         state: WorkflowState,
         planning_result: PlanningResult,
     ) -> None:
+        """
+        将planner规划好的result写回到state当中
+
+        :param state: 共享state状态信息
+        :param planning_result: planner skill规划好的result结果
+        :return: None
+        """
         state.task_type = self._to_task_type(planning_result.task_type)
         state.company_name = planning_result.company_name
         state.ts_code = planning_result.ts_code

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
+from app.domain.models import TimeRange
 
 
 class TaskType(str, Enum):
@@ -103,7 +104,7 @@ class WorkflowState:
     task_type: TaskType = TaskType.UNKNOWN
     company_name: Optional[str] = None
     ts_code: Optional[str] = None
-    time_range: Optional[str] = None
+    time_range: Optional[TimeRange] = None
     analysis_focus: Optional[str] = None
     output_mode: OutputMode = OutputMode.REPORT
 

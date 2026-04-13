@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domain.planning_models import PlanningResult
+from app.domain.models import PlanningResult
 from app.skills.planning.planning_parser import parse_planning_result
 from app.skills.planning.planning_policy import finalize_planning_result
 from app.skills.planning.planning_prompt_builder import build_planning_prompt

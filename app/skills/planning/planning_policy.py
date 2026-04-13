@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from typing import Optional
 
-from app.domain.planning_models import PlanningResult, PlanningStep, TimeRange
+from app.domain.models import PlanningResult, PlanningStep, TimeRange
 
 
 def finalize_planning_result(

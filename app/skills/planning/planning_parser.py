@@ -8,7 +8,7 @@ import json
 import re
 from typing import Any, Optional
 
-from app.domain.planning_models import PlanningResult, PlanningStep, TimeRange
+from app.domain.models import PlanningResult, PlanningStep, TimeRange
 
 
 ALLOWED_TASK_TYPES = {
@@ -226,9 +226,9 @@ def parse_task_plan(task_plan_raw: list[Any]) -> Optional[list[PlanningStep]]:
 
 def parse_time_range(value: Any) -> Optional[TimeRange]:
     """
-    解析 time_range。
+    解析并校验time_range是否合法。
 
-    要求输入必须是：
+    要求输入必须是TimeRange：
     {
         "start_year": int,
         "start_month": int,
