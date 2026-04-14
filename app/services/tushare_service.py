@@ -106,6 +106,8 @@ class TushareService:
     def fetch_stock_basic(
         self,
         list_status: str = "L",
+        ts_code: Optional[str] = None,
+        name: Optional[str] = None,
         exchange: Optional[str] = None,
         market: Optional[str] = None,
         is_hs: Optional[str] = None,
@@ -116,6 +118,10 @@ class TushareService:
         常见参数：list_status / exchange / market / is_hs
         """
         params: dict[str, Any] = {"list_status": list_status}
+        if name:
+            params["name"] = name
+        if ts_code:
+            params["ts_code"] = ts_code
         if exchange:
             params["exchange"] = exchange
         if market:
@@ -562,6 +568,8 @@ class TushareService:
     def get_company_records(
         self,
         list_status: str = "L",
+        ts_code: Optional[str] = None,
+        name: Optional[str] = None,
         exchange: Optional[str] = None,
         market: Optional[str] = None,
         is_hs: Optional[str] = None,
@@ -569,6 +577,8 @@ class TushareService:
         """获取并标准化公司基础信息"""
         df = self.fetch_stock_basic(
             list_status=list_status,
+            ts_code=ts_code,
+            name=name,
             exchange=exchange,
             market=market,
             is_hs=is_hs,

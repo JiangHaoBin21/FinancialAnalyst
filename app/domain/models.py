@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from datetime import date
 
 @dataclass
 class PlanningStep:
@@ -11,6 +12,7 @@ class PlanningStep:
     agent: str
     action: str
     description: str
+
 
 @dataclass
 class TimeRange:
@@ -43,3 +45,28 @@ class PlanningResult:
     needs_user_input: bool = False
     missing_fields: list[str] = field(default_factory=list)
     raw_response: str = ""
+
+
+@dataclass
+class ParsedTimeRange:
+    """
+    解析后的时间范围：YYYYMMDD风格
+    obj供repo查询使用，
+    字符串供TuShare接口使用。
+    """
+    start_date_obj: Optional[date]
+    end_date_obj: Optional[date]
+    start_date_str: Optional[str]
+    end_date_str: Optional[str]
+
+
+@dataclass
+class DataCompletenessResult:
+    """数据完整性检查结果"""
+    needs_backfill: bool
+    missing_parts: list[str] = field(default_factory=list)
+    years_covered: list[int] = field(default_factory=list)
+    expected_years: list[int] = field(default_factory=list)
+    missing_years: list[int] = field(default_factory=list)
+    has_missing_data: bool = False
+    completeness_reason: str = ""
