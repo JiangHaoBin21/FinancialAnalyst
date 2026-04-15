@@ -62,11 +62,28 @@ class ParsedTimeRange:
 
 @dataclass
 class DataCompletenessResult:
-    """数据完整性检查结果"""
     needs_backfill: bool
-    missing_parts: list[str] = field(default_factory=list)
-    years_covered: list[int] = field(default_factory=list)
-    expected_years: list[int] = field(default_factory=list)
-    missing_years: list[int] = field(default_factory=list)
-    has_missing_data: bool = False
-    completeness_reason: str = ""
+    missing_parts: list[str]
+
+    expected_periods: list[str]
+    available_periods_by_part: dict[str, list[str]]
+    missing_periods_by_part: dict[str, list[str]]
+
+    has_missing_data: bool
+    completeness_reason: str
+
+
+@dataclass
+class DataSummary:
+    """数据摘要，供AnalysisAgent使用"""
+    ts_code: str
+    company_name: str
+
+    normalized_start_date: Optional[str]
+    normalized_end_date: Optional[str]
+
+    company_source: str
+    financial_data_sources: dict[str, str]
+
+    record_counts: dict[str, int]
+    latest_end_date: Optional[str]

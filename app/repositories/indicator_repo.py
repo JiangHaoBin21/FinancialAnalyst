@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from app.models.db_models import FinaIndicator
+from app.repositories.helpers import should_replace_by_update_flag
 
 
 class FinaIndicatorRepository:
@@ -183,6 +184,11 @@ class FinaIndicatorRepository:
         )
 
         if record:
+            if not should_replace_by_update_flag(
+                    existing_update_flag=record.update_flag,
+                    incoming_update_flag=indicator_data.get("update_flag"),
+            ):
+                return record
             for field, value in indicator_data.items():
                 if hasattr(record, field):
                     setattr(record, field, value)

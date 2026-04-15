@@ -665,4 +665,4 @@ if __name__ == "__main__":
     config = TushareServiceConfig(token=settings.TuShare_Token)
     print(type(config),config)
     pro = TushareService(config)
-    print(pro.get_company_records(),len(pro.get_company_records()))
+    print(pro.get_company_records("贵州茅台啊"),len(pro.get_company_records("贵州茅台啊")))

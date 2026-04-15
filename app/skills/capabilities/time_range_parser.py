@@ -9,7 +9,7 @@ from app.domain.models import ParsedTimeRange
 class TimeRangeParser:
     def parse(self, time_range: TimeRange | None) -> ParsedTimeRange:
         start_date_str = f"{time_range.start_year}{time_range.start_month:02d}01"
-        if time_range.end_year % 4 == 0 and time_range.end_year % 100 != 0 or time_range.end_year % 400 == 0:
+        if (time_range.end_year % 4 == 0 and time_range.end_year % 100 != 0 or time_range.end_year % 400 == 0) and time_range.end_month == 2:
             end_date_str = f"{time_range.end_year}{time_range.end_month:02d}29"
         elif time_range.end_month == 2:
             end_date_str = f"{time_range.end_year}{time_range.end_month:02d}28"

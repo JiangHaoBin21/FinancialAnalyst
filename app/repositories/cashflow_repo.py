@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
 from app.models.db_models import CashFlow
+from app.repositories.helpers import should_replace_by_update_flag
 
 
 class CashFlowRepository:
@@ -190,6 +191,11 @@ class CashFlowRepository:
         )
 
         if record:
+            if not should_replace_by_update_flag(
+                    existing_update_flag=record.update_flag,
+                    incoming_update_flag=cashflow_data.get("update_flag"),
+            ):
+                return record
             for field, value in cashflow_data.items():
                 if hasattr(record, field):
                     setattr(record, field, value)

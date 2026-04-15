@@ -49,15 +49,13 @@ class CompanyRepository:
         stmt = select(Company).where(Company.id == company_id)
         return db.execute(stmt).scalar_one_or_none()
 
-    def get_ts_code_by_name(self, db: Session, company_name: str) -> Optional[str]:
+    def get_by_name(self, db: Session, company_name: str) -> Optional[str]:
         """
         按公司名称查询公司
         """
         stmt = select(Company).where(Company.name == company_name)
-        try:
-            result = db.execute(stmt).scalar_one_or_none()
-        except:
-            return None
+        result = db.execute(stmt).scalar_one_or_none()
+
         return result
 
     def get_by_ts_code(self, db: Session, ts_code: str) -> Optional[Company]:
