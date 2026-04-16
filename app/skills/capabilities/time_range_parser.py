@@ -4,19 +4,15 @@ from datetime import date, datetime
 
 from app.domain.models import TimeRange
 from app.domain.models import ParsedTimeRange
+from app.repositories.helpers import get_last_day_of_month, get_first_day_of_month
 
 
 class TimeRangeParser:
     def parse(self, time_range: TimeRange | None) -> ParsedTimeRange:
-        start_date_str = f"{time_range.start_year}{time_range.start_month:02d}01"
-        if (time_range.end_year % 4 == 0 and time_range.end_year % 100 != 0 or time_range.end_year % 400 == 0) and time_range.end_month == 2:
-            end_date_str = f"{time_range.end_year}{time_range.end_month:02d}29"
-        elif time_range.end_month == 2:
-            end_date_str = f"{time_range.end_year}{time_range.end_month:02d}28"
-        elif time_range.end_month in [4, 6, 9, 11]:
-            end_date_str = f"{time_range.end_year}{time_range.end_month:02d}30"
-        else:
-            end_date_str = f"{time_range.end_year}{time_range.end_month:02d}31"
+        start_year_month = f"{time_range.start_year}.{time_range.start_month:02d}"
+        end_year_month = f"{time_range.end_year}.{time_range.end_month:02d}"
+        start_date_str = get_first_day_of_month(start_year_month)
+        end_date_str = get_last_day_of_month(end_year_month)
         return ParsedTimeRange(
             start_date_obj=datetime.strptime(start_date_str, "%Y%m%d").date(),
             end_date_obj=datetime.strptime(end_date_str, "%Y%m%d").date(),
