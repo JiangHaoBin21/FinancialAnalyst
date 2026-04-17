@@ -13,6 +13,7 @@ from app.domain.models import PlanningResult, PlanningStep, TimeRange
 
 ALLOWED_TASK_TYPES = {
     "financial_analysis",
+    "financial_data_query",
     "unknown",
 }
 

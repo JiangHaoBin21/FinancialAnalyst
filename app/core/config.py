@@ -20,6 +20,13 @@ class Settings:
     deepseek_model_name: str = os.getenv("DEEPSEEK_MODEL_NAME")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL")
 
+    CORE_FINANCIAL_PARTS = [
+        "income_statements",
+        "balance_sheets",
+        "cashflow_statements",
+        "financial_indicators",
+    ]
+
     def validate(self) -> None:
         missing = []
 

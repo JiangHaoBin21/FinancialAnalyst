@@ -1,80 +1,125 @@
-"""检查即将交付的信息是否完整"""
-from venv import CORE_VENV_DEPS
-
-from app.domain.models import TimeRange
-from app.domain.models import DataCompletenessResult
 from typing import Any
-
-from app.repositories.helpers import generate_quarter_ends
+from app.core.config import settings
+from app.domain.models import TimeRange, DataCompletenessResult, PartCompletenessDetail
+from app.utils.date_utils import generate_quarter_ends
 
 
 class DataCompletenessChecker:
-    """检查数据是否完整，覆盖的年限是否足够"""
-    CORE_FINANCIAL_PARTS = [
-        "income_statements",
-        "balance_sheets",
-        "cashflow_statements",
-        "financial_indicators",
-    ]
+    """检查数据是否完整，覆盖的季度是否足够"""
+
+    def __init__(self) -> None:
+        self.CORE_FINANCIAL_PARTS = settings.CORE_FINANCIAL_PARTS
 
     def check(
         self,
         requested_time_range: TimeRange | None,
         financial_data: dict[str, Any],
-        required_parts: str | None = None,
+        required_parts: list[str] | None = None,
     ) -> DataCompletenessResult:
-        missing_part = []
-        tables = self.CORE_FINANCIAL_PARTS.copy()
-        for item in self.CORE_FINANCIAL_PARTS:
-            records = financial_data.get(item)
-            if not records:
-                missing_part.append(item)
-                tables.remove(item)
+        tables = list(required_parts) if required_parts else self.CORE_FINANCIAL_PARTS.copy()
 
-        requested_start_year_month = f"{requested_time_range.start_year}.{requested_time_range.start_month:02d}"
-        requested_end_year_month = f"{requested_time_range.end_year}.{requested_time_range.end_month:02d}"
-        excepted_periods = generate_quarter_ends(requested_start_year_month, requested_end_year_month)
-        print("tables:", tables)
-        available_periods_by_part = self.get_financial_data_range(financial_data, tables)
-        missing_periods_by_part = self.check_missing_periods(available_periods_by_part, excepted_periods)
-
-        return DataCompletenessResult(
-            needs_backfill=bool(missing_part or missing_periods_by_part),
-            missing_parts=missing_part,
-            available_periods_by_part=available_periods_by_part,
-            expected_periods=excepted_periods,
-            missing_periods_by_part=missing_periods_by_part,
-            has_missing_data=bool(missing_part or missing_periods_by_part),
-            completeness_reason=self.get_completeness_reason(missing_part, missing_periods_by_part)
+        requested_start_year_month = (
+            f"{requested_time_range.start_year}.{requested_time_range.start_month:02d}"
+        )
+        requested_end_year_month = (
+            f"{requested_time_range.end_year}.{requested_time_range.end_month:02d}"
+        )
+        expected_periods = generate_quarter_ends(
+            requested_start_year_month,
+            requested_end_year_month,
         )
 
+        part_details = self.build_part_details(
+            financial_data=financial_data,
+            tables=tables,
+            expected_periods=expected_periods,
+        )
 
-    def get_financial_data_range(self, financial_data: dict[str, Any], tables: list[str]) -> dict[str, list]:
-        """获取财务数据覆盖的区间"""
-        covered_periods = {key: [] for key in tables}
-        for item in tables:
-            records = financial_data.get(item)
+        missing_parts = [
+            part_name
+            for part_name, detail in part_details.items()
+            if not detail.is_complete
+        ]
+
+        has_missing_data = bool(missing_parts)
+
+        return DataCompletenessResult(
+            needs_backfill=has_missing_data,
+            missing_parts=missing_parts,
+            expected_periods=expected_periods,
+            part_details=part_details,
+            has_missing_data=has_missing_data,
+            completeness_reason=self.get_completeness_reason(part_details),
+        )
+
+    def build_part_details(
+        self,
+        financial_data: dict[str, Any],
+        tables: list[str],
+        expected_periods: list[str],
+    ) -> dict[str, PartCompletenessDetail]:
+        part_details: dict[str, PartCompletenessDetail] = {}
+
+        for part_name in tables:
+            records = financial_data.get(part_name) or []
+
+            available_periods = []
             for record in records:
-                if record.end_date not in covered_periods[item]:
-                    covered_periods[item].append(str(record.end_date))
+                end_date = str(record.end_date)
+                if end_date not in available_periods:
+                    available_periods.append(end_date)
 
-        return covered_periods
+            # 保持有序，便于调试和 summary 展示
+            available_periods = sorted(available_periods)
+            missing_periods = [
+                period for period in expected_periods
+                if period not in available_periods
+            ]
 
-    def check_missing_periods(self, available_periods_by_part: dict[str, Any], excepted_periods: list[str]) -> dict[str, Any]:
-        """检查缺失的季报"""
-        missing_period = {}
-        for key, value in available_periods_by_part.items():
-            missing_value = list(set(excepted_periods) - set(value))
-            if missing_value:
-                missing_period[key] = missing_value
-        return missing_period
+            part_details[part_name] = PartCompletenessDetail(
+                part_name=part_name,
+                available_periods=available_periods,
+                missing_periods=missing_periods,
+                is_complete=(len(missing_periods) == 0),
+                record_count=len(records),
+            )
 
-    def get_completeness_reason(self, missing_part, missing_periods_by_part):
-        if not (missing_part or missing_periods_by_part):
+        return part_details
+
+    def get_completeness_reason(
+        self,
+        part_details: dict[str, PartCompletenessDetail],
+    ) -> str:
+        incomplete_parts = [
+            detail for detail in part_details.values()
+            if not detail.is_complete
+        ]
+
+        if not incomplete_parts:
             return "DataAgent：数据完整性检查通过"
-        elif missing_part and not missing_periods_by_part:
-            return f"DataAgent：数据不完整，{missing_part} 表为空"
-        elif missing_periods_by_part and not missing_part:
-            return f"DataAgent：数据不完整，缺少 {missing_periods_by_part.keys()} 表中 {missing_periods_by_part.values()} 季度数据"
-        else:
-            return f"DataAgent：数据不完整，{missing_part} 表为空，且缺少 {missing_periods_by_part.keys()} 表中 {missing_periods_by_part.values()} 季度数据"
+
+        empty_parts = [
+            detail.part_name
+            for detail in incomplete_parts
+            if detail.record_count == 0
+        ]
+
+        partial_missing_parts = {
+            detail.part_name: detail.missing_periods
+            for detail in incomplete_parts
+            if detail.record_count > 0 and detail.missing_periods
+        }
+
+        if empty_parts and not partial_missing_parts:
+            return f"DataAgent：数据不完整，{empty_parts} 表为空"
+
+        if partial_missing_parts and not empty_parts:
+            return (
+                f"DataAgent：数据不完整，缺少以下季度数据："
+                f"{partial_missing_parts}"
+            )
+
+        return (
+            f"DataAgent：数据不完整，{empty_parts} 表为空，且缺少以下季度数据："
+            f"{partial_missing_parts}"
+        )

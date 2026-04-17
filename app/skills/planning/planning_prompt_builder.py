@@ -150,26 +150,38 @@ def build_planning_prompt(user_query: str) -> str:
 ====================
 【规划规则】
 ====================
-1. 如果用户想分析某家上市公司的财务情况、财报、年报、季报、经营表现、风险情况：
+1. 如果用户只是“查看/查询/获取某些财务数据”，且没有要求分析或判断：
+- task_type 设为 "financial_data_query"
+
+典型例子：
+- 查看宁德时代近五年收入
+- 给我比亚迪最近三年的净利润
+- 查询某公司资产负债表数据
+
+注意：
+- “收入 / 利润 / 财报”这些词本身不代表分析
+- 只有出现“趋势 / 表现 / 好不好 / 是否增长”等，才属于分析
+
+2. 如果用户想分析某家上市公司的财务情况、财报、年报、季报、经营表现、风险情况：
 - task_type 设为 "financial_analysis"
 
-2. 如果无法识别用户任务：
+3. 如果无法识别用户任务：
 - task_type 设为 "unknown"
 
-3. 如果用户明确要求“简单总结 / 简短结论 / 摘要”：
+4. 如果用户明确要求“简单总结 / 简短结论 / 摘要”：
 - output_mode 设为 "summary"
 否则默认设为 "report"
 
-4. 如果缺少执行任务所必需的信息，才设置：
+5. 如果缺少执行任务所必需的信息，才设置：
 - needs_user_input = true
 - missing_fields 填写缺失字段名列表
 
-5. time_range 不是强制字段：
+6. time_range 不是强制字段：
 - 如果用户明确给出了时间范围，尽量提取为结构化对象
 - 如果用户没有明确给出时间范围，time_range 可以为 null
 - 不要因为缺少 time_range 就直接要求用户补充，除非该任务明确必须依赖用户指定时间范围
 
-6. 你可以参考以下典型执行模式，但不要机械套用：
+7. 你可以参考以下典型执行模式，但不要机械套用：
 
 - 如果用户要求“获取/同步/查看财务数据”，可只规划 DataAgent。
 - 如果用户要求“分析财务表现/风险/指标变化”，通常需要 DataAgent + AnalysisAgent。
@@ -181,10 +193,10 @@ def build_planning_prompt(user_query: str) -> str:
 2. 不要因为存在某个 Agent 就默认把它加入计划。
 3. 如果已有信息足够，就不要重复调用上游步骤。
 
-7. 不要让 ReportAgent 在没有数据和分析结论的情况下直接产出最终报告
-8. 不要让 AnalysisAgent 在没有数据准备的情况下先进行深度分析
-9. ReflectionAgent 通常用于质量检查，而不是主执行入口
-10. task_plan 应体现高层步骤，不要写得过细，不要出现底层实现细节
+8. 不要让 ReportAgent 在没有数据和分析结论的情况下直接产出最终报告
+9. 不要让 AnalysisAgent 在没有数据准备的情况下先进行深度分析
+10. ReflectionAgent 通常用于质量检查，而不是主执行入口
+11. task_plan 应体现高层步骤，不要写得过细，不要出现底层实现细节
 
 ====================
 【time_range 字段规则】
@@ -214,10 +226,38 @@ def build_planning_prompt(user_query: str) -> str:
 5. 如果 needs_user_input = true，task_plan 可以为空，或者只保留非常高层说明
 
 ====================
+【analysis_focus 字段规则】
+====================
+1. analysis_focus 表示“本次任务的高层分析焦点短语”，用于后续 subagent 的 LLM 理解任务重点。
+
+2. 如果 task_type = "financial_analysis" | "financial_data_query"，必须尽量提炼一个 analysis_focus，而不是默认设为 null。
+
+3. analysis_focus 的本质是：
+- 对用户问题的“语义提炼”
+- 一句简洁的分析重点提示
+- 用于帮助后续 Agent 判断应关注哪些数据和分析方向
+
+4. 提炼原则：
+- 优先保留用户原意，但进行适度压缩与抽象
+- 不要求归类为固定标签
+- 不要简单复制用户原句，应进行“总结性表达”
+
+5. 表达要求：
+- 使用简洁自然语言短语（建议 5~20 字）
+- 可以包含多个关注点（例如“盈利能力与偿债风险”）
+- 不要写成长句或解释性文本
+
+6. 只有在以下情况才允许设为 null：
+- task_type 不是 "financial_analysis"
+- 或用户输入完全无法推断任何分析重点（极少情况）
+
+7. 如果能够提炼 analysis_focus，必须填写该字段，不要只在 planner_message 或 task_plan 中间接表达。
+
+====================
 【输出 JSON Schema】
 ====================
 {{
-"task_type": "financial_analysis | unknown",
+"task_type": "financial_analysis | financial_data_query | unknown",
 "company_name": "字符串或 null",
 "ts_code": "字符串或 null",
 "time_range": {{

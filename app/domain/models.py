@@ -61,16 +61,40 @@ class ParsedTimeRange:
 
 
 @dataclass
+class PartCompletenessDetail:
+    """单个数据表（part）的完整性详情"""
+    part_name: str
+    available_periods: list[str]
+    missing_periods: list[str]
+    is_complete: bool
+    record_count: int = 0
+
+
+@dataclass
 class DataCompletenessResult:
+    """数据完整性检查结果"""
     needs_backfill: bool
     missing_parts: list[str]
 
     expected_periods: list[str]
-    available_periods_by_part: dict[str, list[str]]
-    missing_periods_by_part: dict[str, list[str]]
+    part_details: dict[str, PartCompletenessDetail]
 
     has_missing_data: bool
     completeness_reason: str
+
+
+@dataclass
+class DataPreparationResult:
+    ts_code: str
+    company_name: str
+    time_range: TimeRange
+    required_parts: list[str]
+
+    raw_financial_data: dict[str, list[dict]]
+    completeness_result: DataCompletenessResult
+
+    preparation_status: str
+    message: str = ""
 
 
 @dataclass

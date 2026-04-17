@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 from app.domain.models import TimeRange
 from app.domain.models import ParsedTimeRange
-from app.repositories.helpers import get_last_day_of_month, get_first_day_of_month
+from app.utils.date_utils import get_last_day_of_month, get_first_day_of_month
 
 
 class TimeRangeParser:
