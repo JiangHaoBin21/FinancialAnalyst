@@ -5,7 +5,6 @@ from datetime import date
 from typing import Any, Optional
 from app.core.config import settings
 from requests import Session
-from app.repositories.income_repo import IncomeRepository
 
 
 def should_replace_by_update_flag(
@@ -29,33 +28,49 @@ def should_replace_by_update_flag(
 
     return True
 
-# def get_record_by_part_and_time_range(
-#     db: Session,
-#     ts_code: str,
-#     part_name: str,
-#     start_date_obj: date,
-#     end_date_obj: date,
-#     repo
-# ):
-#     """
-#     按表明和指定时间范围查询记录
-#     """
-#     if part_name not in settings.CORE_FINANCIAL_PARTS:
-#         raise ValueError(f"非法的财务数据表名: {part_name}")
-#     if part_name == "income":
-
-def get_repo_from_part_name(
+def get_repo_or_func_from_part_name(
         part_name: str,
-        list_of_repos: list[Any],
+        list_of_repos: list[Any] = None,
+        tushare: Any = None,
 ) -> Any:
     """
     根据表名获取对应的 Repo
     """
-    if part_name == settings.CORE_FINANCIAL_PARTS[0]:
-        return list_of_repos[0]
-    elif part_name == settings.CORE_FINANCIAL_PARTS[1]:
-        return list_of_repos[1]
-    elif part_name == settings.CORE_FINANCIAL_PARTS[2]:
-        return list_of_repos[2]
+    if list_of_repos:
+        part_name_to_repo = {
+            settings.CORE_FINANCIAL_PARTS[0]: list_of_repos[0],
+            settings.CORE_FINANCIAL_PARTS[1]: list_of_repos[1],
+            settings.CORE_FINANCIAL_PARTS[2]: list_of_repos[2],
+            settings.CORE_FINANCIAL_PARTS[3]: list_of_repos[3],
+        }
+        return part_name_to_repo.get(part_name)
     else:
-        return list_of_repos[3]
+        part_name_to_tushare = {
+            settings.CORE_FINANCIAL_PARTS[0]: tushare.get_income_records,
+            settings.CORE_FINANCIAL_PARTS[1]: tushare.get_balance_sheet_records,
+            settings.CORE_FINANCIAL_PARTS[2]: tushare.get_cashflow_records,
+            settings.CORE_FINANCIAL_PARTS[3]: tushare.get_fina_indicator_records,
+        }
+        return part_name_to_tushare.get(part_name)
+
+def get_records_from_date_and_required_parts(
+        db: Session,
+        ts_code,
+        start_date_obj: date,
+        end_date_obj: date,
+        required_parts: list,
+        list_of_repos: list
+) -> dict[str, list]:
+    raw_financial_data = {}
+    for part_name in required_parts:
+        if part_name not in settings.CORE_FINANCIAL_PARTS:
+            raise ValueError(f"非法的财务数据表名: {part_name}")
+        repo = get_repo_or_func_from_part_name(part_name, list_of_repos)
+        raw_financial_data[part_name] = (
+            repo.list_by_ts_code_and_date_range(
+                db=db,
+                ts_code=ts_code,
+                start_date=start_date_obj,
+                end_date=end_date_obj
+            ))
+    return raw_financial_data

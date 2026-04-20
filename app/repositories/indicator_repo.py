@@ -201,13 +201,13 @@ class FinaIndicatorRepository:
     def bulk_upsert(
         self,
         db: Session,
-        indicators_data: List[dict],
+        data: List[dict],
     ) -> List[FinaIndicator]:
         """
         批量 upsert 财务指标记录
         """
         results = []
-        for item in indicators_data:
+        for item in data:
             record = self.upsert(db, item)
             results.append(record)
         return results

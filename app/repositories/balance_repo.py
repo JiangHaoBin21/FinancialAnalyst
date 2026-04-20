@@ -26,15 +26,15 @@ class BalanceSheetRepository:
         db.refresh(record)
         return record
 
-    def bulk_create(self, db: Session, balances_data: List[dict]) -> List[BalanceSheet]:
+    def bulk_create(self, db: Session, data: List[dict]) -> List[BalanceSheet]:
         """
         批量创建资产负债表记录
 
         :param db: 数据库 Session
-        :param balances_data: 资产负债表字段字典列表
+        :param data: 资产负债表字段字典列表
         :return: 创建后的 BalanceSheet 对象列表
         """
-        records = [BalanceSheet(**item) for item in balances_data]
+        records = [BalanceSheet(**item) for item in data]
         db.add_all(records)
         db.flush()
 
@@ -208,13 +208,13 @@ class BalanceSheetRepository:
     def bulk_upsert(
         self,
         db: Session,
-        balances_data: List[dict],
+        data: List[dict],
     ) -> List[BalanceSheet]:
         """
         批量 upsert 资产负债表记录
         """
         results = []
-        for item in balances_data:
+        for item in data:
             record = self.upsert(db, item)
             results.append(record)
         return results

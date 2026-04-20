@@ -11,7 +11,7 @@ from app.domain.models import TimeRange, DataPreparationResult
 from app.repositories.balance_repo import BalanceSheetRepository
 from app.repositories.cashflow_repo import CashFlowRepository
 from app.repositories.company_repo import CompanyRepository
-from app.repositories.helpers import get_repo_from_part_name
+from app.repositories.helpers import get_repo_or_func_from_part_name, get_records_from_date_and_required_parts
 from app.repositories.income_repo import IncomeRepository
 from app.repositories.indicator_repo import FinaIndicatorRepository
 from app.services.tushare_service import TushareService
@@ -51,6 +51,7 @@ class DataPreparationSkill:
         indicator_repo: FinaIndicatorRepository,
         cashflow_repo: CashFlowRepository,
         balance_repo: BalanceSheetRepository,
+        tushare_service: TushareService
     ) -> None:
         self.company_resolver = company_resolver
         self.time_range_parser = time_range_parser
@@ -59,14 +60,15 @@ class DataPreparationSkill:
         self.indicator_repo = indicator_repo
         self.cashflow_repo = cashflow_repo
         self.balance_repo = balance_repo
+        self.tushare_service = tushare_service
 
     def prepare(
         self,
         db: Session,
-        ts_code: str,
-        company_name: str,
         time_range: TimeRange,
         required_parts: list[str],
+        ts_code: str = None,
+        company_name: str = None
     ) -> DataPreparationResult:
         already_backfill = False
         raw_financial_data = {}
@@ -77,18 +79,27 @@ class DataPreparationSkill:
         )
         if required_parts is None:
             required_parts = settings.CORE_FINANCIAL_PARTS.copy()
-        for part_name in required_parts:
-            if part_name not in settings.CORE_FINANCIAL_PARTS:
-                raise ValueError(f"非法的财务数据表名: {part_name}")
-            repo = get_repo_from_part_name(part_name, [self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo])
-            parsed_time_range = self.time_range_parser.parse(time_range)
-            raw_financial_data[part_name] = (
-                repo.list_by_ts_code_and_date_range(
-                    db=db,
-                    ts_code=company_profile["ts_code"],
-                    start_date=parsed_time_range.start_date_obj,
-                    end_date=parsed_time_range.end_date_obj
-                ))
+        parsed_time_range = self.time_range_parser.parse(time_range)
+        try:
+            raw_financial_data = get_records_from_date_and_required_parts(
+                db=db,
+                ts_code=company_profile["ts_code"],
+                start_date_obj=parsed_time_range.start_date_obj,
+                end_date_obj=parsed_time_range.end_date_obj,
+                required_parts=required_parts,
+                list_of_repos=[self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo]
+            )
+        except ValueError as e:
+            return DataPreparationResult(
+                ts_code=company_profile["ts_code"],
+                company_name=company_profile["name"],
+                time_range=time_range,
+                required_parts=required_parts,
+                raw_financial_data=raw_financial_data,
+                completeness_result=None,
+                preparation_status="failed",
+                message=str(e)
+            )
         completeness_result = self.data_completeness_checker.check(
             requested_time_range=time_range,
             financial_data=raw_financial_data,
@@ -96,6 +107,40 @@ class DataPreparationSkill:
         )
         need_backfill = {}
         if completeness_result.needs_backfill and not already_backfill:
+            already_backfill = True
             for item in completeness_result.part_details.values():
                 if not item.is_complete:
+                    need_backfill[item.part_name] = item.missing_periods
 
+        backfill_data = {}
+        print(need_backfill)
+        for part_name, backfill_item in need_backfill.items():
+            tushare_get_func = get_repo_or_func_from_part_name(part_name, tushare=self.tushare_service)
+            for period in backfill_item:
+                backfill_data[part_name] = backfill_data.get(part_name, []) + [tushare_get_func(ts_code=company_profile["ts_code"], period=period)]
+            print(backfill_data)
+            repo = get_repo_or_func_from_part_name(part_name, [self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo])
+            repo.bulk_upsert(db=db, data=backfill_data[part_name])
+        raw_financial_data = get_records_from_date_and_required_parts(
+            db=db,
+            ts_code=company_profile["ts_code"],
+            start_date_obj=parsed_time_range.start_date_obj,
+            end_date_obj=parsed_time_range.end_date_obj,
+            required_parts=required_parts,
+            list_of_repos=[self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo]
+        )
+        completeness_result = self.data_completeness_checker.check(
+            requested_time_range=time_range,
+            financial_data=raw_financial_data,
+            required_parts=required_parts,
+        )
+        return DataPreparationResult(
+            ts_code=company_profile["ts_code"],
+            company_name=company_profile["name"],
+            time_range=time_range,
+            required_parts=required_parts,
+            raw_financial_data=raw_financial_data,
+            completeness_result=completeness_result,
+            preparation_status="success",
+            message=f"时间范围{parsed_time_range.start_date_obj} ~ {parsed_time_range.end_date_obj}数据准备完成，从TuShare获取数据{1 if already_backfill else 0}次。"
+        )

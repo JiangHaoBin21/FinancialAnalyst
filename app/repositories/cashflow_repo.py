@@ -12,29 +12,29 @@ from app.repositories.helpers import should_replace_by_update_flag
 class CashFlowRepository:
     """现金流量表数据访问层"""
 
-    def create(self, db: Session, cashflow_data: dict) -> CashFlow:
+    def create(self, db: Session, data: dict) -> CashFlow:
         """
         创建单条现金流量表记录
 
         :param db: 数据库 Session
-        :param cashflow_data: 现金流量表字段字典
+        :param data: 现金流量表字段字典
         :return: 创建后的 CashFlow 对象
         """
-        record = CashFlow(**cashflow_data)
+        record = CashFlow(**data)
         db.add(record)
         db.flush()
         db.refresh(record)
         return record
 
-    def bulk_create(self, db: Session, cashflows_data: List[dict]) -> List[CashFlow]:
+    def bulk_create(self, db: Session, data: List[dict]) -> List[CashFlow]:
         """
         批量创建现金流量表记录
 
         :param db: 数据库 Session
-        :param cashflows_data: 现金流量表字段字典列表
+        :param data: 现金流量表字段字典列表
         :return: 创建后的 CashFlow 对象列表
         """
-        records = [CashFlow(**item) for item in cashflows_data]
+        records = [CashFlow(**item) for item in data]
         db.add_all(records)
         db.flush()
 
@@ -208,13 +208,13 @@ class CashFlowRepository:
     def bulk_upsert(
         self,
         db: Session,
-        cashflows_data: List[dict],
+        data: List[dict],
     ) -> List[CashFlow]:
         """
         批量 upsert 现金流量表记录
         """
         results = []
-        for item in cashflows_data:
+        for item in data:
             record = self.upsert(db, item)
             results.append(record)
         return results

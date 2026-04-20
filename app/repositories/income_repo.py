@@ -26,15 +26,15 @@ class IncomeRepository:
         db.refresh(record)
         return record
 
-    def bulk_create(self, db: Session, incomes_data: List[dict]) -> List[Income]:
+    def bulk_create(self, db: Session, data: List[dict]) -> List[Income]:
         """
         批量创建利润表记录
 
         :param db: 数据库 Session
-        :param incomes_data: 利润表字段字典列表
+        :param data: 利润表字段字典列表
         :return: 创建后的 Income 对象列表
         """
-        records = [Income(**item) for item in incomes_data]
+        records = [Income(**item) for item in data]
         db.add_all(records)
         db.flush()
 
@@ -208,13 +208,13 @@ class IncomeRepository:
     def bulk_upsert(
         self,
         db: Session,
-        incomes_data: List[dict],
+        data: List[dict],
     ) -> List[Income]:
         """
         批量 upsert 利润表记录
         """
         results = []
-        for item in incomes_data:
+        for item in data:
             record = self.upsert(db, item)
             results.append(record)
         return results

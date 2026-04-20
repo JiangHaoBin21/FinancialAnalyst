@@ -91,7 +91,7 @@ class DataPreparationResult:
     required_parts: list[str]
 
     raw_financial_data: dict[str, list[dict]]
-    completeness_result: DataCompletenessResult
+    completeness_result: DataCompletenessResult | None
 
     preparation_status: str
     message: str = ""

@@ -25,15 +25,15 @@ class CompanyRepository:
         db.refresh(company)
         return company
 
-    def bulk_create(self, db: Session, companies_data: List[dict]) -> List[Company]:
+    def bulk_create(self, db: Session, data: List[dict]) -> List[Company]:
         """
         批量创建公司记录
 
         :param db: 数据库 Session
-        :param companies_data: 公司字段字典列表
+        :param data: 公司字段字典列表
         :return: 创建后的 Company 对象列表
         """
-        companies = [Company(**item) for item in companies_data]
+        companies = [Company(**item) for item in data]
         db.add_all(companies)
         db.flush()
 

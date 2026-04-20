@@ -101,7 +101,7 @@ def main() -> None:
             print("\n===== STEP 6: Persist fetched records =====")
             # 这里的方法名按你的 repo 实际接口改
             # 如果你没有 bulk_upsert，就先循环 upsert
-            indicator_repo.bulk_upsert(db=db, indicators_data=fetched_indicator_records)
+            indicator_repo.bulk_upsert(db=db, data=fetched_indicator_records)
 
             db.commit()
             print("persist success")
