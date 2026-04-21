@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -68,9 +70,9 @@ class DataPreparationSkill:
         time_range: TimeRange,
         required_parts: list[str],
         ts_code: str = None,
-        company_name: str = None
+        company_name: str = None,
+        backfill: dict[str, list] = None
     ) -> DataPreparationResult:
-        already_backfill = False
         raw_financial_data = {}
         company_profile = self.company_resolver.resolve(
             db=db,
@@ -80,6 +82,18 @@ class DataPreparationSkill:
         if required_parts is None:
             required_parts = settings.CORE_FINANCIAL_PARTS.copy()
         parsed_time_range = self.time_range_parser.parse(time_range)
+        if backfill:
+            backfill_data = {}
+            for part_name, need_backfill_item in backfill.items():
+                tushare_get_func = get_repo_or_func_from_part_name(part_name, tushare=self.tushare_service)
+                for period in need_backfill_item:
+                    backfill_data[part_name] = backfill_data.get(part_name, []) + tushare_get_func(
+                        ts_code=company_profile["ts_code"], period=period.replace("-", ""))
+                print(backfill_data)
+                repo = get_repo_or_func_from_part_name(part_name,
+                                                       [self.income_repo, self.balance_repo, self.cashflow_repo,
+                                                        self.indicator_repo])
+                repo.bulk_upsert(db=db, data=backfill_data[part_name])
         try:
             raw_financial_data = get_records_from_date_and_required_parts(
                 db=db,
@@ -105,42 +119,77 @@ class DataPreparationSkill:
             financial_data=raw_financial_data,
             required_parts=required_parts,
         )
-        need_backfill = {}
-        if completeness_result.needs_backfill and not already_backfill:
-            already_backfill = True
-            for item in completeness_result.part_details.values():
-                if not item.is_complete:
-                    need_backfill[item.part_name] = item.missing_periods
-
-        backfill_data = {}
-        print(need_backfill)
-        for part_name, backfill_item in need_backfill.items():
-            tushare_get_func = get_repo_or_func_from_part_name(part_name, tushare=self.tushare_service)
-            for period in backfill_item:
-                backfill_data[part_name] = backfill_data.get(part_name, []) + [tushare_get_func(ts_code=company_profile["ts_code"], period=period)]
-            print(backfill_data)
-            repo = get_repo_or_func_from_part_name(part_name, [self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo])
-            repo.bulk_upsert(db=db, data=backfill_data[part_name])
-        raw_financial_data = get_records_from_date_and_required_parts(
-            db=db,
-            ts_code=company_profile["ts_code"],
-            start_date_obj=parsed_time_range.start_date_obj,
-            end_date_obj=parsed_time_range.end_date_obj,
-            required_parts=required_parts,
-            list_of_repos=[self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo]
-        )
-        completeness_result = self.data_completeness_checker.check(
-            requested_time_range=time_range,
-            financial_data=raw_financial_data,
-            required_parts=required_parts,
-        )
-        return DataPreparationResult(
-            ts_code=company_profile["ts_code"],
-            company_name=company_profile["name"],
-            time_range=time_range,
-            required_parts=required_parts,
-            raw_financial_data=raw_financial_data,
-            completeness_result=completeness_result,
-            preparation_status="success",
-            message=f"时间范围{parsed_time_range.start_date_obj} ~ {parsed_time_range.end_date_obj}数据准备完成，从TuShare获取数据{1 if already_backfill else 0}次。"
-        )
+        if backfill:
+            return DataPreparationResult(
+                ts_code=company_profile["ts_code"],
+                company_name=company_profile["company_name"],
+                time_range=time_range,
+                required_parts=required_parts,
+                raw_financial_data=raw_financial_data,
+                completeness_result=completeness_result,
+                preparation_status="success",
+                message=f"时间范围{parsed_time_range.start_date_obj} ~ {parsed_time_range.end_date_obj}缺失数据已回源并落库，完整数据已准备就绪"
+            )
+        else:
+            return DataPreparationResult(
+                ts_code=company_profile["ts_code"],
+                company_name=company_profile["company_name"],
+                time_range=time_range,
+                required_parts=required_parts,
+                raw_financial_data=raw_financial_data,
+                completeness_result=completeness_result,
+                preparation_status="success",
+                message=f"时间范围{parsed_time_range.start_date_obj} ~ {parsed_time_range.end_date_obj}数据准备流程成功"
+            )
+        # else:
+        #     backfill_data = {}
+        #     for part_name, need_backfill_item in backfill.items():
+        #         tushare_get_func = get_repo_or_func_from_part_name(part_name, tushare=self.tushare_service)
+        #         for period in need_backfill_item:
+        #             backfill_data[part_name] = backfill_data.get(part_name, []) + tushare_get_func(ts_code=company_profile["ts_code"], period=period)
+        #         print(backfill_data)
+        #         repo = get_repo_or_func_from_part_name(part_name,
+        #                                                [self.income_repo, self.balance_repo, self.cashflow_repo,
+        #                                                 self.indicator_repo])
+        #         repo.bulk_upsert(db=db, data=backfill_data[part_name])
+        #
+        # # need_backfill = {}
+        # # if completeness_result.needs_backfill and not already_backfill:
+        # #     already_backfill = True
+        # #     for item in completeness_result.part_details.values():
+        # #         if not item.is_complete:
+        # #             need_backfill[item.part_name] = []
+        # #             for period in item.missing_periods:
+        # #                 need_backfill[item.part_name].append(period.replace("-", ""))
+        #
+        # backfill_data = {}
+        # for part_name, backfill_item in need_backfill.items():
+        #     tushare_get_func = get_repo_or_func_from_part_name(part_name, tushare=self.tushare_service)
+        #     for period in backfill_item:
+        #         backfill_data[part_name] = backfill_data.get(part_name, []) + tushare_get_func(ts_code=company_profile["ts_code"], period=period)
+        #     print(backfill_data)
+        #     repo = get_repo_or_func_from_part_name(part_name, [self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo])
+        #     repo.bulk_upsert(db=db, data=backfill_data[part_name])
+        # raw_financial_data = get_records_from_date_and_required_parts(
+        #     db=db,
+        #     ts_code=company_profile["ts_code"],
+        #     start_date_obj=parsed_time_range.start_date_obj,
+        #     end_date_obj=parsed_time_range.end_date_obj,
+        #     required_parts=required_parts,
+        #     list_of_repos=[self.income_repo, self.balance_repo, self.cashflow_repo, self.indicator_repo]
+        # )
+        # completeness_result = self.data_completeness_checker.check(
+        #     requested_time_range=time_range,
+        #     financial_data=raw_financial_data,
+        #     required_parts=required_parts,
+        # )
+        # return DataPreparationResult(
+        #     ts_code=company_profile["ts_code"],
+        #     company_name=company_profile["company_name"],
+        #     time_range=time_range,
+        #     required_parts=required_parts,
+        #     raw_financial_data=raw_financial_data,
+        #     completeness_result=completeness_result,
+        #     preparation_status="success",
+        #     message=f"时间范围{parsed_time_range.start_date_obj} ~ {parsed_time_range.end_date_obj}数据准备完成，从TuShare获取数据{1 if already_backfill else 0}次。"
+        # )

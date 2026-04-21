@@ -139,7 +139,12 @@ def main() -> None:
             company_name=company_name,
             time_range=time_range,
             required_parts=required_parts,
+            backfill={
+                "income_statements": ['2023-03-31', '2023-06-30', '2023-09-30', '2023-12-31', '2024-03-31', '2024-06-30', '2024-09-30', '2024-12-31', '2025-03-31', '2025-06-30', '2025-09-30', '2025-12-31'],
+            }
         )
+
+        db.commit()
 
         print_result(result)
 
