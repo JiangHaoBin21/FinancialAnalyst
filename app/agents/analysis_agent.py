@@ -1,4 +1,4 @@
-"""AnalysisAgent: 最小可运行 stub 版本。"""
+"""AnalysisAgent: minimal analysis implementation."""
 
 from __future__ import annotations
 
@@ -6,28 +6,30 @@ from app.workflows.state import WorkflowState
 
 
 class AnalysisAgent:
-    """
-    最小版 AnalysisAgent：
-    - 不做真实财务分析
-    - 只基于 mock 数据写一点假结果
-    """
+    """Produces a simple analysis from merged financial data."""
 
-    def run(self, state: WorkflowState) -> WorkflowState:
+    def run(self, state: WorkflowState) -> dict:
         print("[AnalysisAgent] running...")
 
-        revenue = state.financial_data.get("revenue", [])
-        net_profit = state.financial_data.get("net_profit", [])
+        financial_data = state.get("financial_data", {})
+        income = financial_data.get("income_statements", {})
+        indicators = financial_data.get("financial_indicators", {})
 
-        state.analysis_result = {
-            "profitability": "good",
-            "growth_trend": "upward",
+        revenue = income.get("revenue", [])
+        net_profit = income.get("net_profit", [])
+
+        analysis_result = {
+            "profitability": "good" if net_profit else "unknown",
+            "growth_trend": "upward" if revenue else "unknown",
             "revenue": revenue,
             "net_profit": net_profit,
+            "indicator_snapshot": indicators,
         }
 
-        state.analysis_summary = (
-            "Mock analysis done: company shows stable growth and decent profitability."
-        )
-
-        state.assistant_message = "AnalysisAgent 已完成 mock 分析。"
-        return state
+        return {
+            "analysis_result": analysis_result,
+            "analysis_summary": (
+                "Mock analysis done: company shows stable growth and decent profitability."
+            ),
+            "assistant_message": "AnalysisAgent completed mock analysis.",
+        }

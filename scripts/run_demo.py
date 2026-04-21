@@ -1,12 +1,12 @@
+from app.agents.analysis_agent import AnalysisAgent
+from app.agents.data_agent import DataAgent
+from app.agents.reflection_agent import ReflectionAgent
+from app.agents.report_agent import ReportAgent
+from app.agents.supervisor_agent import SupervisorAgent
+from app.llms.openai_client import OpenAIClient
+from app.skills.planning.planning_skill import PlanningSkill
 from app.workflows.graph import WorkflowGraph
 from app.workflows.nodes import WorkflowNodes
-from app.agents.supervisor_agent import SupervisorAgent
-from app.agents.data_agent import DataAgent
-from app.agents.analysis_agent import AnalysisAgent
-from app.agents.report_agent import ReportAgent
-from app.agents.reflection_agent import ReflectionAgent
-from app.skills.planning.planning_skill import PlanningSkill
-from app.llms.openai_client import OpenAIClient
 
 
 def main():
@@ -28,19 +28,19 @@ def main():
         enable_trace=True,
     )
 
-    state = graph.run("请分析财务表现")
+    state = graph.run("Analyze 000001.SZ financial performance and generate a report.")
 
     print("\n===== FINAL STATUS =====")
-    print(state.status)
+    print(state.get("status"))
 
     print("\n===== ASSISTANT MESSAGE =====")
-    print(state.assistant_message)
+    print(state.get("assistant_message"))
 
     print("\n===== FINAL REPORT =====")
-    print(state.final_report)
+    print(state.get("final_report"))
 
     print("\n===== EXECUTION HISTORY =====")
-    for record in state.execution_history:
+    for record in state.get("execution_history", []):
         print(record)
 
 

@@ -1,21 +1,25 @@
-"""Workflow state definitions."""
+"""LangGraph-native workflow state definitions."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Annotated, Any, Optional, TypedDict
+
 from app.domain.models import TimeRange
 
 
+def append_list(left: Optional[list[Any]], right: Optional[list[Any]]) -> list[Any]:
+    """Reducer for fields written by parallel LangGraph nodes."""
+    return list(left or []) + list(right or [])
+
+
 class TaskType(str, Enum):
-    """顶层任务类型，由 PlanningSkill / Supervisor 决定。"""
     FINANCIAL_ANALYSIS = "financial_analysis"
     UNKNOWN = "unknown"
 
 
 class WorkflowStep(str, Enum):
-    """工作流节点名 / 当前阶段标记。"""
     SUPERVISOR = "supervisor"
     AWAIT_USER_INPUT = "await_user_input"
     DATA = "data"
@@ -27,13 +31,11 @@ class WorkflowStep(str, Enum):
 
 
 class OutputMode(str, Enum):
-    """报告输出形式。"""
     REPORT = "report"
     SUMMARY = "summary"
 
 
 class PlanStepStatus(str, Enum):
-    """计划步骤执行状态。"""
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
@@ -42,10 +44,10 @@ class PlanStepStatus(str, Enum):
 
 
 class WorkflowStatus(str, Enum):
-    """工作流整体状态。"""
     INIT = "init"
     NEEDS_USER_INPUT = "needs_user_input"
     READY_FOR_EXECUTION = "ready_for_execution"
+    DATA_PLANNED = "data_planned"
     DATA_READY = "data_ready"
     ANALYSIS_READY = "analysis_ready"
     REPORT_READY = "report_ready"
@@ -56,12 +58,8 @@ class WorkflowStatus(str, Enum):
 
 @dataclass
 class PlanStep:
-    """
-    Planner 生成的单个计划步骤。
-    注意：
-    - 这是“计划层”的 step，不是 graph node 本身
-    - graph/node 会根据 plan step 的 agent 来决定执行哪个节点
-    """
+    """A high-level agent step produced by the supervisor planner."""
+
     step_id: int
     agent: str
     action: str
@@ -71,9 +69,8 @@ class PlanStep:
 
 @dataclass
 class ExecutionRecord:
-    """
-    记录每个节点/Agent的一次执行情况，便于调试、回放、面试展示。
-    """
+    """Observable execution record for graph nodes and agents."""
+
     step: str
     agent: str
     success: bool
@@ -82,205 +79,238 @@ class ExecutionRecord:
 
 
 @dataclass
-class WorkflowState:
-    """
-    多 Agent 财报分析系统的共享工作流状态。
+class DataPartResult:
+    """Result emitted by a parallel data fetch node."""
 
-    设计原则：
-    1. 所有 Agent 都围绕这个 state 读写
-    2. supervisor 负责写入初始规划结果
-    3. nodes / graph 根据 task_plan + current_step_index 推进流程
-    4. 正常主流程尽量按 plan 驱动，而不是硬编码顺序
-    """
+    part_name: str
+    payload: Any
+    success: bool = True
+    message: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    # =========================
-    # 1. 用户输入层
-    # =========================
+
+class WorkflowState(TypedDict, total=False):
+    # User input
     user_query: str
 
-    # =========================
-    # 2. 意图识别 / 规划层
-    # =========================
-    task_type: TaskType = TaskType.UNKNOWN
-    company_name: Optional[str] = None
-    ts_code: Optional[str] = None
-    time_range: Optional[TimeRange] = None
-    analysis_focus: Optional[str] = None
-    output_mode: OutputMode = OutputMode.REPORT
+    # Supervisor / planning layer
+    task_type: TaskType
+    company_name: Optional[str]
+    ts_code: Optional[str]
+    time_range: Optional[TimeRange]
+    analysis_focus: Optional[str]
+    output_mode: OutputMode
+    planner_message: Optional[str]
+    raw_planner_response: Optional[str]
+    needs_user_input: bool
+    missing_fields: list[str]
+    task_plan: list[PlanStep]
+    current_step_index: int
+    completed_step_ids: list[int]
 
-    planner_message: Optional[str] = None
-    raw_planner_response: Optional[str] = None
+    # Data planning and fan-out layer
+    required_data_parts: list[str]
+    data_part_results: Annotated[list[DataPartResult], append_list]
+    data_fetch_errors: Annotated[list[str], append_list]
 
-    needs_user_input: bool = False
-    missing_fields: list[str] = field(default_factory=list)
+    # Data merge results
+    company_profile: dict[str, Any]
+    financial_data: dict[str, Any]
+    data_summary: dict[str, Any]
 
-    task_plan: list[PlanStep] = field(default_factory=list)
+    # Analysis results
+    analysis_result: dict[str, Any]
+    analysis_summary: Optional[str]
 
-    # 计划执行游标：用于 plan-driven workflow
-    current_step_index: int = 0
-    completed_step_ids: list[int] = field(default_factory=list)
+    # Report results
+    report_draft: Optional[str]
+    report_sections: dict[str, Any]
+    final_report: Optional[str]
 
-    # =========================
-    # 3. Data Agent 结果层
-    # =========================
-    company_profile: dict[str, Any] = field(default_factory=dict)
-    financial_data: dict[str, Any] = field(default_factory=dict)
-    data_summary: dict[str, Any] = field(default_factory=dict)
+    # Reflection results
+    reflection_result: dict[str, Any]
+    needs_revision: bool
+    replan_required: bool
 
-    # =========================
-    # 4. Analysis Agent 结果层
-    # =========================
-    analysis_result: dict[str, Any] = field(default_factory=dict)
-    analysis_summary: Optional[str] = None
+    # Flow control
+    current_stage: WorkflowStep
+    next_step: Optional[WorkflowStep]
+    status: WorkflowStatus
+    is_finished: bool
+    has_error: bool
+    error_message: Optional[str]
+    assistant_message: Optional[str]
 
-    # =========================
-    # 5. Report Agent 结果层
-    # =========================
-    report_draft: Optional[str] = None
-    report_sections: dict[str, Any] = field(default_factory=dict)
-    final_report: Optional[str] = None
+    # Observability
+    execution_history: Annotated[list[ExecutionRecord], append_list]
 
-    # =========================
-    # 6. Reflection Agent 结果层
-    # =========================
-    reflection_result: dict[str, Any] = field(default_factory=dict)
-    needs_revision: bool = False
-    replan_required: bool = False
+    # Final output
+    final_response: Optional[str]
 
-    # =========================
-    # 7. 流程控制层
-    # =========================
-    current_stage: WorkflowStep = WorkflowStep.SUPERVISOR
-    next_step: Optional[WorkflowStep] = None
-    status: WorkflowStatus = WorkflowStatus.INIT
 
-    is_finished: bool = False
-    has_error: bool = False
-    error_message: Optional[str] = None
+DATA_PART_COMPANY_PROFILE = "company_profile"
+DATA_PART_INCOME = "income_statements"
+DATA_PART_BALANCE = "balance_sheets"
+DATA_PART_CASHFLOW = "cashflow_statements"
+DATA_PART_INDICATORS = "financial_indicators"
 
-    # 给用户/前端看的当前消息
-    assistant_message: Optional[str] = None
+CORE_DATA_PARTS = [
+    DATA_PART_COMPANY_PROFILE,
+    DATA_PART_INCOME,
+    DATA_PART_BALANCE,
+    DATA_PART_CASHFLOW,
+    DATA_PART_INDICATORS,
+]
 
-    # =========================
-    # 8. 可观测性 / 调试层
-    # =========================
-    execution_history: list[ExecutionRecord] = field(default_factory=list)
 
-    # =========================
-    # 9. 最终输出层
-    # =========================
-    final_response: Optional[str] = None
+def create_initial_state(user_query: str) -> WorkflowState:
+    """Create a full initial state so graph nodes can use safe defaults."""
+    return {
+        "user_query": user_query,
+        "task_type": TaskType.UNKNOWN,
+        "company_name": None,
+        "ts_code": None,
+        "time_range": None,
+        "analysis_focus": None,
+        "output_mode": OutputMode.REPORT,
+        "planner_message": None,
+        "raw_planner_response": None,
+        "needs_user_input": False,
+        "missing_fields": [],
+        "task_plan": [],
+        "current_step_index": 0,
+        "completed_step_ids": [],
+        "required_data_parts": [],
+        "data_part_results": [],
+        "data_fetch_errors": [],
+        "company_profile": {},
+        "financial_data": {},
+        "data_summary": {},
+        "analysis_result": {},
+        "analysis_summary": None,
+        "report_draft": None,
+        "report_sections": {},
+        "final_report": None,
+        "reflection_result": {},
+        "needs_revision": False,
+        "replan_required": False,
+        "current_stage": WorkflowStep.SUPERVISOR,
+        "next_step": WorkflowStep.SUPERVISOR,
+        "status": WorkflowStatus.INIT,
+        "is_finished": False,
+        "has_error": False,
+        "error_message": None,
+        "assistant_message": None,
+        "execution_history": [],
+        "final_response": None,
+    }
 
-    # =========================
-    # 10. 基础辅助方法
-    # =========================
 
-    def add_execution_record(
-        self,
-        step: str,
-        agent: str,
-        success: bool,
-        message: str = "",
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> None:
-        """追加一条执行记录。"""
-        self.execution_history.append(
-            ExecutionRecord(
-                step=step,
-                agent=agent,
-                success=success,
-                message=message,
-                metadata=metadata or {},
-            )
+def execution_record(
+    step: str,
+    agent: str,
+    success: bool,
+    message: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> ExecutionRecord:
+    return ExecutionRecord(
+        step=step,
+        agent=agent,
+        success=success,
+        message=message,
+        metadata=metadata or {},
+    )
+
+
+def get_current_plan_step(state: WorkflowState) -> Optional[PlanStep]:
+    index = state.get("current_step_index", 0)
+    task_plan = state.get("task_plan", [])
+    if index < 0 or index >= len(task_plan):
+        return None
+    return task_plan[index]
+
+
+def update_current_plan_step_status(
+    state: WorkflowState,
+    status: PlanStepStatus,
+) -> list[PlanStep]:
+    task_plan = [
+        PlanStep(
+            step_id=step.step_id,
+            agent=step.agent,
+            action=step.action,
+            description=step.description,
+            status=step.status,
         )
+        for step in state.get("task_plan", [])
+    ]
+    index = state.get("current_step_index", 0)
+    if 0 <= index < len(task_plan):
+        task_plan[index].status = status
+    return task_plan
 
-    def set_error(self, message: str) -> None:
-        """设置错误状态。"""
-        self.has_error = True
-        self.error_message = message
-        self.status = WorkflowStatus.ERROR
-        self.current_stage = WorkflowStep.ERROR
-        self.next_step = WorkflowStep.ERROR
-        self.is_finished = False
 
-    def mark_finished(self, final_response: Optional[str] = None) -> None:
-        """标记工作流完成。"""
-        self.is_finished = True
-        self.status = WorkflowStatus.FINISHED
-        self.current_stage = WorkflowStep.FINISHED
-        self.next_step = WorkflowStep.FINISHED
-        if final_response is not None:
-            self.final_response = final_response
+def complete_current_plan_step(state: WorkflowState) -> dict[str, Any]:
+    task_plan = update_current_plan_step_status(state, PlanStepStatus.DONE)
+    step = get_current_plan_step(state)
+    completed_step_ids = list(state.get("completed_step_ids", []))
+    if step is not None and step.step_id not in completed_step_ids:
+        completed_step_ids.append(step.step_id)
 
-    def reset_for_replan(self) -> None:
-        """
-        当 Reflection 或其他节点要求重新规划时，可调用本方法。
-        注意：保留已有中间结果是否合理，可按后续需求再细化。
-        """
-        self.replan_required = False
-        self.needs_user_input = False
-        self.missing_fields = []
-        self.task_plan = []
-        self.current_step_index = 0
-        self.completed_step_ids = []
-        self.current_stage = WorkflowStep.SUPERVISOR
-        self.next_step = WorkflowStep.SUPERVISOR
-        self.status = WorkflowStatus.INIT
+    current_step_index = state.get("current_step_index", 0) + 1
+    next_step = next_workflow_step(task_plan, current_step_index)
+    return {
+        "task_plan": task_plan,
+        "completed_step_ids": completed_step_ids,
+        "current_step_index": current_step_index,
+        "next_step": next_step,
+    }
 
-    # =========================
-    # 11. plan-driven workflow 辅助方法
-    # =========================
 
-    def get_current_plan_step(self) -> Optional[PlanStep]:
-        """获取当前待执行的计划步骤。"""
-        if self.current_step_index < 0 or self.current_step_index >= len(self.task_plan):
-            return None
-        return self.task_plan[self.current_step_index]
+def fail_current_plan_step(state: WorkflowState) -> dict[str, Any]:
+    return {"task_plan": update_current_plan_step_status(state, PlanStepStatus.FAILED)}
 
-    def mark_current_plan_step_running(self) -> None:
-        """将当前计划步骤标记为 running。"""
-        step = self.get_current_plan_step()
-        if step is not None:
-            step.status = PlanStepStatus.RUNNING
 
-    def mark_current_plan_step_done(self) -> None:
-        """将当前计划步骤标记为 done，并记录完成列表。"""
-        step = self.get_current_plan_step()
-        if step is not None:
-            step.status = PlanStepStatus.DONE
-            if step.step_id not in self.completed_step_ids:
-                self.completed_step_ids.append(step.step_id)
+def next_workflow_step(
+    task_plan: list[PlanStep],
+    current_step_index: int,
+) -> WorkflowStep:
+    if current_step_index < 0 or current_step_index >= len(task_plan):
+        return WorkflowStep.FINISHED
 
-    def mark_current_plan_step_failed(self) -> None:
-        """将当前计划步骤标记为 failed。"""
-        step = self.get_current_plan_step()
-        if step is not None:
-            step.status = PlanStepStatus.FAILED
+    agent_to_workflow_step = {
+        "DataAgent": WorkflowStep.DATA,
+        "AnalysisAgent": WorkflowStep.ANALYSIS,
+        "ReportAgent": WorkflowStep.REPORT,
+        "ReflectionAgent": WorkflowStep.REFLECTION,
+    }
+    return agent_to_workflow_step.get(task_plan[current_step_index].agent, WorkflowStep.ERROR)
 
-    def advance_plan_step(self) -> None:
-        """推进计划游标到下一步。"""
-        self.current_step_index += 1
 
-    def has_remaining_plan_steps(self) -> bool:
-        """是否还有剩余计划步骤。"""
-        return self.current_step_index < len(self.task_plan)
+def is_current_plan_agent(state: WorkflowState, expected_agent: str) -> bool:
+    step = get_current_plan_step(state)
+    return step is not None and step.agent == expected_agent
 
-    def set_next_step_from_plan(self) -> None:
-        """
-        根据当前 plan cursor 推导 next_step。
-        仅用于正常主流程推进。
-        异常、中断、等待用户输入时，应由节点显式覆盖 next_step。
-        """
-        step = self.get_current_plan_step()
-        if step is None:
-            self.next_step = WorkflowStep.FINISHED
-            return
 
-        agent_to_workflow_step = {
-            "DataAgent": WorkflowStep.DATA,
-            "AnalysisAgent": WorkflowStep.ANALYSIS,
-            "ReportAgent": WorkflowStep.REPORT,
-            "ReflectionAgent": WorkflowStep.REFLECTION,
-        }
+def error_update(message: str) -> dict[str, Any]:
+    return {
+        "has_error": True,
+        "error_message": message,
+        "status": WorkflowStatus.ERROR,
+        "current_stage": WorkflowStep.ERROR,
+        "next_step": WorkflowStep.ERROR,
+        "is_finished": False,
+        "assistant_message": message,
+    }
 
-        self.next_step = agent_to_workflow_step.get(step.agent, WorkflowStep.ERROR)
+
+def normalize_for_json(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return normalize_for_json(asdict(obj))
+    if isinstance(obj, dict):
+        return {k: normalize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [normalize_for_json(v) for v in obj]
+    if hasattr(obj, "value"):
+        return obj.value
+    return obj

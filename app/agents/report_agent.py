@@ -1,4 +1,4 @@
-"""ReportAgent: 最小可运行 stub 版本。"""
+"""ReportAgent: minimal report generation implementation."""
 
 from __future__ import annotations
 
@@ -6,37 +6,35 @@ from app.workflows.state import WorkflowState
 
 
 class ReportAgent:
-    """
-    最小版 ReportAgent：
-    - 不调用 LLM
-    - 直接拼一份简单字符串报告
-    """
+    """Builds a simple report from analysis output."""
 
-    def run(self, state: WorkflowState) -> WorkflowState:
+    def run(self, state: WorkflowState) -> dict:
         print("[ReportAgent] running...")
 
-        company = state.company_name or state.ts_code or "目标公司"
-        summary = state.analysis_summary or "暂无分析摘要。"
+        company = state.get("company_name") or state.get("ts_code") or "TargetCompany"
+        company_profile = state.get("company_profile", {})
+        summary = state.get("analysis_summary") or "No analysis summary available."
 
-        report = f"""# {company} 财务分析报告（Mock）
+        report = f"""# {company} Financial Analysis Report (Mock)
 
-## 一、公司概况
-- 公司名称：{state.company_profile.get("company_name", "未知")}
-- 股票代码：{state.company_profile.get("ts_code", "未知")}
-- 行业：{state.company_profile.get("industry", "未知")}
+## Company Profile
+- Company: {company_profile.get("company_name", "Unknown")}
+- Ticker: {company_profile.get("ts_code", "Unknown")}
+- Industry: {company_profile.get("industry", "Unknown")}
 
-## 二、分析摘要
+## Analysis Summary
 {summary}
 
-## 三、结论
-这是一个用于打通 workflow 的 mock 报告。
+## Conclusion
+This is a mock report used to validate the LangGraph workflow.
 """
 
-        state.report_draft = report
-        state.report_sections = {
-            "company_profile": state.company_profile,
-            "analysis_summary": summary,
+        return {
+            "report_draft": report,
+            "report_sections": {
+                "company_profile": company_profile,
+                "analysis_summary": summary,
+            },
+            "final_report": report,
+            "assistant_message": "ReportAgent generated mock report.",
         }
-        state.final_report = report
-        state.assistant_message = "ReportAgent 已生成 mock 报告。"
-        return state

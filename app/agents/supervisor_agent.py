@@ -1,196 +1,187 @@
-"""Supervisor Agent：负责接收用户请求、调用规划器、写回状态、决定流程入口。"""
+"""SupervisorAgent: plans the high-level agent workflow."""
 
 from __future__ import annotations
 
-from app.skills.planning.planning_skill import PlanningSkill
 from app.domain.models import PlanningResult, PlanningStep as SkillPlanningStep
+from app.skills.planning.planning_skill import PlanningSkill
 from app.workflows.state import (
-    WorkflowState,
-    TaskType,
-    WorkflowStep,
-    WorkflowStatus,
     OutputMode,
     PlanStep,
+    TaskType,
+    WorkflowState,
+    WorkflowStatus,
+    WorkflowStep,
+    next_workflow_step,
 )
 
 
 class SupervisorAgent:
-    """
-    SupervisorAgent 是系统的任务调度入口。
+    """Top-level planner.
 
-    职责：
-    1. 接收用户输入
-    2. 调用 PlanningSkill 做任务理解与高层规划
-    3. 将规划结果写回 WorkflowState
-    4. 生成缺失信息追问
-    5. 初始化 plan-driven workflow 的执行入口
-
-    不负责：
-    - 不直接拉取数据
-    - 不直接做财务分析
-    - 不直接生成报告正文
+    The supervisor decides which agents should run. It does not decide the
+    internal data parts; that belongs to DataAgent.
     """
 
     def __init__(self, planning_skill: PlanningSkill):
         self.planning_skill = planning_skill
 
-    def run(self, state: WorkflowState) -> WorkflowState:
-        user_query = getattr(state, "user_query", None)
+    def run(self, state: WorkflowState) -> dict:
+        user_query = state.get("user_query")
         if not user_query or not str(user_query).strip():
-            return self._handle_empty_query(state)
+            return self._empty_query_update()
 
         try:
-            # 方案 B：planning_skill 内部已经串了 prompt_builder / parser / policy
             planning_result = self.planning_skill.plan_financial_task(user_query=user_query)
-        except Exception as e:
-            return self._handle_planning_exception(state, e)
+        except Exception as exc:
+            return self._planning_exception_update(exc)
 
-        self._write_planning_result_to_state(state, planning_result)
+        update = self._planning_result_update(planning_result)
 
         if planning_result.needs_user_input:
-            clarification_message = self._build_clarification_message(planning_result)
-            self._mark_waiting_for_user_input(
-                state=state,
-                assistant_message=clarification_message,
+            update.update(
+                self._waiting_for_user_input_update(
+                    assistant_message=self._build_clarification_message(planning_result),
+                )
             )
-            return state
+            return update
 
-        self._mark_ready_for_execution(state, planning_result)
-        return state
+        update.update(self._ready_for_execution_update(planning_result, update["task_plan"]))
+        return update
 
-    def _write_planning_result_to_state(
+    def _planning_result_update(self, planning_result: PlanningResult) -> dict:
+        task_plan = [self._to_state_plan_step(step) for step in planning_result.task_plan]
+        return {
+            "task_type": self._to_task_type(planning_result.task_type),
+            "company_name": planning_result.company_name,
+            "ts_code": planning_result.ts_code,
+            "time_range": planning_result.time_range,
+            "analysis_focus": planning_result.analysis_focus,
+            "output_mode": self._to_output_mode(planning_result.output_mode),
+            "planner_message": planning_result.planner_message,
+            "needs_user_input": planning_result.needs_user_input,
+            "missing_fields": list(planning_result.missing_fields or []),
+            "raw_planner_response": planning_result.raw_response,
+            "task_plan": task_plan,
+            "current_step_index": 0,
+            "completed_step_ids": [],
+            "current_stage": WorkflowStep.SUPERVISOR,
+            "next_step": None,
+            "has_error": False,
+            "error_message": None,
+            "is_finished": False,
+        }
+
+    @staticmethod
+    def _waiting_for_user_input_update(assistant_message: str) -> dict:
+        return {
+            "status": WorkflowStatus.NEEDS_USER_INPUT,
+            "current_stage": WorkflowStep.AWAIT_USER_INPUT,
+            "next_step": WorkflowStep.AWAIT_USER_INPUT,
+            "assistant_message": assistant_message,
+            "is_finished": False,
+            "has_error": False,
+            "error_message": None,
+        }
+
+    def _ready_for_execution_update(
         self,
-        state: WorkflowState,
         planning_result: PlanningResult,
-    ) -> None:
-        """
-        将planner规划好的result写回到state当中
+        task_plan: list[PlanStep],
+    ) -> dict:
+        next_step = next_workflow_step(task_plan, 0)
+        assistant_message = self._build_ready_message(planning_result)
+        update = {
+            "status": WorkflowStatus.READY_FOR_EXECUTION,
+            "current_stage": WorkflowStep.SUPERVISOR,
+            "next_step": next_step,
+            "assistant_message": assistant_message,
+            "is_finished": False,
+            "has_error": False,
+            "error_message": None,
+        }
 
-        :param state: 共享state状态信息
-        :param planning_result: planner skill规划好的result结果
-        :return: None
-        """
-        state.task_type = self._to_task_type(planning_result.task_type)
-        state.company_name = planning_result.company_name
-        state.ts_code = planning_result.ts_code
-        state.time_range = planning_result.time_range
-        state.analysis_focus = planning_result.analysis_focus
-        state.output_mode = self._to_output_mode(planning_result.output_mode)
+        if next_step == WorkflowStep.ERROR:
+            update.update(
+                {
+                    "has_error": True,
+                    "status": WorkflowStatus.ERROR,
+                    "error_message": "Planner task_plan cannot be mapped to workflow steps.",
+                    "assistant_message": "Planner task_plan cannot be mapped to workflow steps.",
+                }
+            )
 
-        state.planner_message = planning_result.planner_message
-        state.needs_user_input = planning_result.needs_user_input
-        state.missing_fields = list(planning_result.missing_fields or [])
-        state.raw_planner_response = planning_result.raw_response
+        return update
 
-        state.task_plan = [self._to_state_plan_step(step) for step in planning_result.task_plan]
+    @staticmethod
+    def _empty_query_update() -> dict:
+        return {
+            "status": WorkflowStatus.NEEDS_USER_INPUT,
+            "current_stage": WorkflowStep.AWAIT_USER_INPUT,
+            "next_step": WorkflowStep.AWAIT_USER_INPUT,
+            "needs_user_input": True,
+            "missing_fields": ["task_description"],
+            "assistant_message": (
+                "Please tell me which company to analyze and what you want to know."
+            ),
+            "is_finished": False,
+            "has_error": False,
+            "error_message": None,
+        }
 
-        state.current_step_index = 0
-        state.completed_step_ids = []
+    @staticmethod
+    def _planning_exception_update(exc: Exception) -> dict:
+        return {
+            "status": WorkflowStatus.ERROR,
+            "current_stage": WorkflowStep.SUPERVISOR,
+            "next_step": WorkflowStep.ERROR,
+            "needs_user_input": False,
+            "assistant_message": "Planning failed; the workflow cannot continue.",
+            "error_message": f"{type(exc).__name__}: {exc}",
+            "has_error": True,
+            "is_finished": False,
+        }
 
-        state.current_stage = WorkflowStep.SUPERVISOR
-        state.next_step = None
-
-        state.has_error = False
-        state.error_message = None
-        state.is_finished = False
-
-    def _mark_waiting_for_user_input(
-        self,
-        state: WorkflowState,
-        assistant_message: str,
-    ) -> None:
-        state.status = WorkflowStatus.NEEDS_USER_INPUT
-        state.current_stage = WorkflowStep.AWAIT_USER_INPUT
-        state.next_step = WorkflowStep.AWAIT_USER_INPUT
-        state.assistant_message = assistant_message
-        state.is_finished = False
-        state.has_error = False
-        state.error_message = None
-
-    def _mark_ready_for_execution(
-        self,
-        state: WorkflowState,
-        planning_result: PlanningResult,
-    ) -> None:
-        state.status = WorkflowStatus.READY_FOR_EXECUTION
-        state.current_stage = WorkflowStep.SUPERVISOR
-        state.assistant_message = self._build_ready_message(planning_result)
-        state.is_finished = False
-        state.has_error = False
-        state.error_message = None
-
-        state.set_next_step_from_plan()
-
-        if state.next_step == WorkflowStep.ERROR:
-            state.has_error = True
-            state.status = WorkflowStatus.ERROR
-            state.error_message = "规划结果中的 task_plan 无法映射到合法工作流步骤。"
-            state.assistant_message = state.error_message
-
-    def _handle_empty_query(self, state: WorkflowState) -> WorkflowState:
-        state.status = WorkflowStatus.NEEDS_USER_INPUT
-        state.current_stage = WorkflowStep.AWAIT_USER_INPUT
-        state.next_step = WorkflowStep.AWAIT_USER_INPUT
-        state.needs_user_input = True
-        state.missing_fields = ["task_description"]
-        state.assistant_message = "请告诉我你想分析哪家公司，以及希望我做什么，例如：分析宁德时代近三年的财务表现。"
-        state.is_finished = False
-        state.has_error = False
-        state.error_message = None
-        return state
-
-    def _handle_planning_exception(self, state: WorkflowState, exc: Exception) -> WorkflowState:
-        state.status = WorkflowStatus.ERROR
-        state.current_stage = WorkflowStep.SUPERVISOR
-        state.next_step = WorkflowStep.ERROR
-        state.needs_user_input = False
-        state.assistant_message = "任务规划阶段出现异常，暂时无法继续。"
-        state.error_message = f"{type(exc).__name__}: {str(exc)}"
-        state.has_error = True
-        state.is_finished = False
-        return state
-
-    def _build_clarification_message(self, planning_result: PlanningResult) -> str:
+    @staticmethod
+    def _build_clarification_message(planning_result: PlanningResult) -> str:
         missing = set(planning_result.missing_fields or [])
-
         if "company_name_or_ts_code" in missing:
-            return "请告诉我你想分析的公司名称或股票代码，例如：宁德时代 或 300750.SZ。"
+            return "Please provide the company name or stock code, such as 300750.SZ."
 
         prompts: list[str] = []
-
         if "company_name" in missing:
-            prompts.append("公司名称")
+            prompts.append("company name")
         if "ts_code" in missing:
-            prompts.append("股票代码")
+            prompts.append("stock code")
         if "time_range" in missing:
-            prompts.append("分析时间范围")
+            prompts.append("time range")
         if "analysis_focus" in missing:
-            prompts.append("分析重点")
+            prompts.append("analysis focus")
         if "task_description" in missing:
-            prompts.append("你的具体需求")
+            prompts.append("task description")
 
         if prompts:
-            joined = "、".join(prompts)
-            return f"为了继续处理你的请求，请补充：{joined}。"
+            return "Please provide: " + ", ".join(prompts) + "."
 
-        return "我还需要你补充一些信息，才能继续为你规划后续分析流程。"
+        return "Please provide more information so I can plan the analysis."
 
     def _build_ready_message(self, planning_result: PlanningResult) -> str:
-        company = planning_result.company_name or planning_result.ts_code or "目标公司"
+        company = planning_result.company_name or planning_result.ts_code or "target company"
         time_range_text = self._format_time_range(planning_result.time_range)
-        focus = planning_result.analysis_focus or "综合财务表现"
-        output_mode = planning_result.output_mode
+        focus = planning_result.analysis_focus or "overall financial performance"
 
-        if output_mode == "summary":
-            return f"已完成任务规划，接下来将围绕 {company} 的 {time_range_text} {focus}进行分析，并输出简要总结。"
+        if planning_result.output_mode == "summary":
+            return f"Planning complete. I will summarize {company} for {time_range_text}: {focus}."
 
-        return f"已完成任务规划，接下来将围绕 {company} 的 {time_range_text} {focus}进行分析，并生成报告。"
+        return f"Planning complete. I will analyze {company} for {time_range_text}: {focus}."
 
     @staticmethod
     def _format_time_range(time_range) -> str:
         if not time_range:
-            return "默认时间范围"
-        return f"{time_range.start_year}.{time_range.start_month:02d} - {time_range.end_year}.{time_range.end_month:02d}"
+            return "the default period"
+        return (
+            f"{time_range.start_year}.{time_range.start_month:02d} - "
+            f"{time_range.end_year}.{time_range.end_month:02d}"
+        )
 
     @staticmethod
     def _to_task_type(value: str) -> TaskType:
