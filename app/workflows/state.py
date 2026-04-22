@@ -1,4 +1,4 @@
-"""LangGraph-native workflow state definitions."""
+"""LangGraph 原生工作流状态定义。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from app.domain.models import TimeRange
 
 
 def append_list(left: Optional[list[Any]], right: Optional[list[Any]]) -> list[Any]:
-    """Reducer for fields written by parallel LangGraph nodes."""
+    """用于并行 LangGraph 节点写入列表字段的归并器。"""
     return list(left or []) + list(right or [])
 
 
@@ -58,7 +58,7 @@ class WorkflowStatus(str, Enum):
 
 @dataclass
 class PlanStep:
-    """A high-level agent step produced by the supervisor planner."""
+    """由 Supervisor 规划器生成的高层 Agent 步骤。"""
 
     step_id: int
     agent: str
@@ -69,7 +69,7 @@ class PlanStep:
 
 @dataclass
 class ExecutionRecord:
-    """Observable execution record for graph nodes and agents."""
+    """用于观测图节点和 Agent 执行过程的记录。"""
 
     step: str
     agent: str
@@ -80,7 +80,7 @@ class ExecutionRecord:
 
 @dataclass
 class DataPartResult:
-    """Result emitted by a parallel data fetch node."""
+    """并行数据抓取节点产出的单个数据分片结果。"""
 
     part_name: str
     payload: Any
@@ -90,10 +90,10 @@ class DataPartResult:
 
 
 class WorkflowState(TypedDict, total=False):
-    # User input
+    # 用户输入
     user_query: str
 
-    # Supervisor / planning layer
+    # Supervisor 与规划层
     task_type: TaskType
     company_name: Optional[str]
     ts_code: Optional[str]
@@ -107,32 +107,32 @@ class WorkflowState(TypedDict, total=False):
     task_plan: list[PlanStep]
     current_step_index: int
     completed_step_ids: list[int]
+    company_profile: dict[str, Any]
 
-    # Data planning and fan-out layer
+    # 数据规划与并行扇出层
     required_data_parts: list[str]
     data_part_results: Annotated[list[DataPartResult], append_list]
     data_fetch_errors: Annotated[list[str], append_list]
 
-    # Data merge results
-    company_profile: dict[str, Any]
+    # 数据合并结果
     financial_data: dict[str, Any]
     data_summary: dict[str, Any]
 
-    # Analysis results
+    # 分析结果
     analysis_result: dict[str, Any]
     analysis_summary: Optional[str]
 
-    # Report results
+    # 报告结果
     report_draft: Optional[str]
     report_sections: dict[str, Any]
     final_report: Optional[str]
 
-    # Reflection results
+    # 反思结果
     reflection_result: dict[str, Any]
     needs_revision: bool
     replan_required: bool
 
-    # Flow control
+    # 流程控制
     current_stage: WorkflowStep
     next_step: Optional[WorkflowStep]
     status: WorkflowStatus
@@ -141,13 +141,14 @@ class WorkflowState(TypedDict, total=False):
     error_message: Optional[str]
     assistant_message: Optional[str]
 
-    # Observability
+    # 可观测性
     execution_history: Annotated[list[ExecutionRecord], append_list]
 
-    # Final output
+    # 最终输出
     final_response: Optional[str]
 
 
+# 数据抓取分片名称，需与 DataAgent 规划结果和 LangGraph 路由保持一致。
 DATA_PART_COMPANY_PROFILE = "company_profile"
 DATA_PART_INCOME = "income_statements"
 DATA_PART_BALANCE = "balance_sheets"
@@ -164,7 +165,7 @@ CORE_DATA_PARTS = [
 
 
 def create_initial_state(user_query: str) -> WorkflowState:
-    """Create a full initial state so graph nodes can use safe defaults."""
+    """创建完整初始状态，确保图节点可以安全读取默认值。"""
     return {
         "user_query": user_query,
         "task_type": TaskType.UNKNOWN,
@@ -213,6 +214,7 @@ def execution_record(
     message: str = "",
     metadata: Optional[dict[str, Any]] = None,
 ) -> ExecutionRecord:
+    """创建统一格式的执行记录。"""
     return ExecutionRecord(
         step=step,
         agent=agent,
@@ -223,6 +225,7 @@ def execution_record(
 
 
 def get_current_plan_step(state: WorkflowState) -> Optional[PlanStep]:
+    """根据 current_step_index 读取当前计划步骤。"""
     index = state.get("current_step_index", 0)
     task_plan = state.get("task_plan", [])
     if index < 0 or index >= len(task_plan):
@@ -234,6 +237,8 @@ def update_current_plan_step_status(
     state: WorkflowState,
     status: PlanStepStatus,
 ) -> list[PlanStep]:
+    """返回更新了当前步骤状态的新计划列表。"""
+    # 复制计划步骤，避免原地修改传入状态。
     task_plan = [
         PlanStep(
             step_id=step.step_id,
@@ -251,6 +256,7 @@ def update_current_plan_step_status(
 
 
 def complete_current_plan_step(state: WorkflowState) -> dict[str, Any]:
+    """标记当前计划步骤完成，并推进到下一步。"""
     task_plan = update_current_plan_step_status(state, PlanStepStatus.DONE)
     step = get_current_plan_step(state)
     completed_step_ids = list(state.get("completed_step_ids", []))
@@ -258,6 +264,7 @@ def complete_current_plan_step(state: WorkflowState) -> dict[str, Any]:
         completed_step_ids.append(step.step_id)
 
     current_step_index = state.get("current_step_index", 0) + 1
+    # 计划索引推进后，重新计算下一类工作流节点。
     next_step = next_workflow_step(task_plan, current_step_index)
     return {
         "task_plan": task_plan,
@@ -268,6 +275,7 @@ def complete_current_plan_step(state: WorkflowState) -> dict[str, Any]:
 
 
 def fail_current_plan_step(state: WorkflowState) -> dict[str, Any]:
+    """标记当前计划步骤失败。"""
     return {"task_plan": update_current_plan_step_status(state, PlanStepStatus.FAILED)}
 
 
@@ -275,9 +283,11 @@ def next_workflow_step(
     task_plan: list[PlanStep],
     current_step_index: int,
 ) -> WorkflowStep:
+    """根据计划中的 Agent 名称计算下一类工作流步骤。"""
     if current_step_index < 0 or current_step_index >= len(task_plan):
         return WorkflowStep.FINISHED
 
+    # 计划步骤中的 Agent 名称决定下一类工作流节点。
     agent_to_workflow_step = {
         "DataAgent": WorkflowStep.DATA,
         "AnalysisAgent": WorkflowStep.ANALYSIS,
@@ -288,11 +298,13 @@ def next_workflow_step(
 
 
 def is_current_plan_agent(state: WorkflowState, expected_agent: str) -> bool:
+    """判断当前计划步骤是否应该由指定 Agent 执行。"""
     step = get_current_plan_step(state)
     return step is not None and step.agent == expected_agent
 
 
 def error_update(message: str) -> dict[str, Any]:
+    """构造进入错误态所需的统一状态更新。"""
     return {
         "has_error": True,
         "error_message": message,
@@ -305,6 +317,7 @@ def error_update(message: str) -> dict[str, Any]:
 
 
 def normalize_for_json(obj: Any) -> Any:
+    """递归转换 dataclass 和枚举，生成 JSON 友好的对象。"""
     if is_dataclass(obj):
         return normalize_for_json(asdict(obj))
     if isinstance(obj, dict):

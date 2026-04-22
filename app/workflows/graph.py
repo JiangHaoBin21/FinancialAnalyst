@@ -1,9 +1,13 @@
-"""LangGraph-native workflow orchestration with parallel data fan-out."""
+"""基于 LangGraph 的工作流编排，支持数据节点并行扇出。"""
 
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from app.core.database import SessionLocal
+from app.services.tushare_service import TushareService
+from app.skills.capabilities.company_resolver import CompanyResolver
+from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.state import (
     DATA_PART_BALANCE,
@@ -22,7 +26,7 @@ from app.workflows.state import (
 
 
 class WorkflowGraph:
-    """Public workflow facade backed directly by LangGraph state."""
+    """直接以 LangGraph 状态驱动的工作流门面。"""
 
     def __init__(
         self,
@@ -33,6 +37,7 @@ class WorkflowGraph:
         self.nodes = nodes
         self.max_iterations = max_iterations
         self.enable_trace = enable_trace
+        # 单步执行时使用的步骤到节点函数映射。
         self._route_table: dict[WorkflowStep, Callable[[WorkflowState], dict]] = {
             WorkflowStep.SUPERVISOR: self.nodes.supervisor_node,
             WorkflowStep.AWAIT_USER_INPUT: self.nodes.await_user_input_node,
@@ -43,17 +48,19 @@ class WorkflowGraph:
             WorkflowStep.FINISHED: self.nodes.finish_node,
             WorkflowStep.ERROR: self.nodes.error_node,
         }
+        # 编译后的 LangGraph 供完整运行路径复用。
         self._compiled_graph = self._build_langgraph()
 
     def run(self, user_query: str) -> WorkflowState:
-        """Start a workflow from a user query."""
+        """从用户查询启动新的工作流。"""
         return self.continue_from_state(create_initial_state(user_query=user_query))
 
     def continue_from_state(self, state: WorkflowState) -> WorkflowState:
-        """Continue execution from an existing LangGraph-native state dict."""
+        """从已有的 LangGraph 原生状态字典继续执行。"""
         if not isinstance(state, dict):
             raise TypeError("continue_from_state requires a WorkflowState dict.")
 
+        # 兼容恢复旧状态或外部传入状态时缺少 next_step 的情况。
         if state.get("next_step") is None:
             state = {**state, "next_step": self._infer_entry_step(state)}
 
@@ -67,10 +74,11 @@ class WorkflowGraph:
                 **state,
                 **error_update(f"LangGraph execution failed: {type(exc).__name__}: {exc}"),
             }
+            # 将运行异常收敛到统一错误节点，保持返回状态结构稳定。
             return self._merge_state_update(failed_state, self.nodes.error_node(failed_state))
 
     def resume_with_user_input(self, state: WorkflowState, user_input: str) -> WorkflowState:
-        """Resume a paused workflow after the user provides missing information."""
+        """用户补充缺失信息后恢复暂停的工作流。"""
         if not isinstance(state, dict):
             raise TypeError("resume_with_user_input requires a WorkflowState dict.")
 
@@ -105,7 +113,7 @@ class WorkflowGraph:
         return self.continue_from_state(resumed_state)
 
     def step_once(self, state: WorkflowState) -> WorkflowState:
-        """Execute a single node and merge its partial update into state."""
+        """执行单个节点，并把该节点的局部更新合并回状态。"""
         if not isinstance(state, dict):
             raise TypeError("step_once requires a WorkflowState dict.")
 
@@ -122,14 +130,16 @@ class WorkflowGraph:
         return max(self.max_iterations + 8, 16)
 
     def _build_langgraph(self):
+        """构建并编译 LangGraph 节点拓扑。"""
         StateGraph, START, END = self._import_langgraph()
 
         builder = StateGraph(WorkflowState)
 
+        # 注册各阶段节点，节点只返回局部状态更新。
         builder.add_node("supervisor", self._wrap_node(self.nodes.supervisor_node))
         builder.add_node("await_user_input", self._wrap_node(self.nodes.await_user_input_node))
         builder.add_node("data_planner", self._wrap_node(self.nodes.data_planner_node))
-        builder.add_node("fetch_company_profile", self._wrap_node(self.nodes.fetch_company_profile_node))
+        builder.add_node("prepare_company_context", self._wrap_node(self.nodes.prepare_company_context_node))
         builder.add_node("fetch_income_statement", self._wrap_node(self.nodes.fetch_income_statement_node))
         builder.add_node("fetch_balance_sheet", self._wrap_node(self.nodes.fetch_balance_sheet_node))
         builder.add_node("fetch_cashflow_statement", self._wrap_node(self.nodes.fetch_cashflow_statement_node))
@@ -142,11 +152,13 @@ class WorkflowGraph:
         builder.add_node("error", self._wrap_node(self.nodes.error_node))
 
         builder.add_edge(START, "supervisor")
+        # 根据状态中的 next_step、status 和错误标记决定下一跳。
         builder.add_conditional_edges("supervisor", self._route_after_node, self._route_path_map(END))
-        builder.add_conditional_edges("data_planner", self._route_data_parts, self._data_route_path_map())
+        builder.add_edge("data_planner", "prepare_company_context")
+        builder.add_conditional_edges("prepare_company_context", self._route_data_parts, self._data_route_path_map())
 
+        # 多个数据抓取节点可以并行执行，最后统一汇聚到 data_merge。
         for fetch_node in (
-            "fetch_company_profile",
             "fetch_income_statement",
             "fetch_balance_sheet",
             "fetch_cashflow_statement",
@@ -166,6 +178,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _import_langgraph():
+        """延迟导入 LangGraph，并在依赖缺失时给出明确错误。"""
         try:
             from langgraph.graph import END, START, StateGraph
         except ImportError as exc:
@@ -177,6 +190,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _route_path_map(end_marker: str) -> dict[str, str]:
+        """定义普通工作流阶段的路由名到节点名映射。"""
         return {
             "await_user_input": "await_user_input",
             "data": "data_planner",
@@ -190,8 +204,8 @@ class WorkflowGraph:
 
     @staticmethod
     def _data_route_path_map() -> dict[str, str]:
+        """定义数据分片路由名到抓取节点名的映射。"""
         return {
-            DATA_PART_COMPANY_PROFILE: "fetch_company_profile",
             DATA_PART_INCOME: "fetch_income_statement",
             DATA_PART_BALANCE: "fetch_balance_sheet",
             DATA_PART_CASHFLOW: "fetch_cashflow_statement",
@@ -201,6 +215,7 @@ class WorkflowGraph:
         }
 
     def _wrap_node(self, node_fn: Callable[[WorkflowState], dict]) -> Callable[[WorkflowState], dict]:
+        """包装节点函数，在开启追踪时输出执行前后的状态摘要。"""
         def wrapped(state: WorkflowState) -> dict:
             if self.enable_trace:
                 self._trace(state, prefix=f"[langgraph.before:{node_fn.__name__}]")
@@ -216,6 +231,7 @@ class WorkflowGraph:
         return wrapped
 
     def _route_after_node(self, state: WorkflowState) -> str:
+        """根据节点执行后的状态选择下一条 LangGraph 边。"""
         if state.get("current_stage") == WorkflowStep.FINISHED or state.get("is_finished"):
             return "end" if state.get("current_stage") == WorkflowStep.FINISHED else "finished"
 
@@ -241,6 +257,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _route_data_parts(state: WorkflowState) -> list[str]:
+        """把数据规划结果转换成需要并行触发的数据抓取路由。"""
         if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
             return ["error"]
 
@@ -248,7 +265,6 @@ class WorkflowGraph:
             part
             for part in state.get("required_data_parts", [])
             if part in {
-                DATA_PART_COMPANY_PROFILE,
                 DATA_PART_INCOME,
                 DATA_PART_BALANCE,
                 DATA_PART_CASHFLOW,
@@ -259,6 +275,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _infer_entry_step(state: WorkflowState) -> WorkflowStep:
+        """根据已有状态推断恢复执行时的入口步骤。"""
         if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
             return WorkflowStep.ERROR
         if state.get("is_finished") or state.get("status") == WorkflowStatus.FINISHED:
@@ -274,6 +291,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _merge_state_update(state: WorkflowState, update: dict) -> WorkflowState:
+        """合并节点局部更新，列表型观测字段采用追加语义。"""
         merged = dict(state)
         for key, value in update.items():
             if key in {"execution_history", "data_part_results", "data_fetch_errors"}:
@@ -284,6 +302,7 @@ class WorkflowGraph:
 
     @staticmethod
     def _trace(state: WorkflowState, prefix: str) -> None:
+        """输出便于调试的工作流状态摘要。"""
         print(
             f"{prefix} "
             f"stage={_enum_value(state.get('current_stage'))} | "
@@ -295,7 +314,7 @@ class WorkflowGraph:
 
     @staticmethod
     def state_to_dict(state: WorkflowState) -> dict[str, Any]:
-        """Convert WorkflowState into a JSON-friendly dictionary."""
+        """将 WorkflowState 转换为便于 JSON 序列化的字典。"""
         return normalize_for_json(dict(state))
 
 
@@ -306,8 +325,9 @@ def build_workflow_graph(
     max_iterations: int = 20,
     enable_trace: bool = False,
 ) -> WorkflowGraph:
-    """Build the default LangGraph-native workflow graph."""
+    """构建默认的 LangGraph 原生工作流图。"""
     if nodes is None:
+        # 延迟创建默认 Agent，方便测试或外部调用时注入自定义节点。
         from app.agents.analysis_agent import AnalysisAgent
         from app.agents.data_agent import DataAgent
         from app.agents.reflection_agent import ReflectionAgent
@@ -315,15 +335,25 @@ def build_workflow_graph(
         from app.agents.supervisor_agent import SupervisorAgent
         from app.llms.openai_client import OpenAIClient
         from app.skills.planning.planning_skill import PlanningSkill
+        from app.repositories.company_repo import CompanyRepository
+        from app.services.tushare_service import TushareServiceConfig
+        from app.core.config import settings
 
         llm_client = llm_client or OpenAIClient()
         planning_skill = PlanningSkill(llm_client=llm_client)
+        company_repo = CompanyRepository()
+        config = TushareServiceConfig(settings.TuShare_Token)
+        tushare_client = TushareService(config)
+        company_resolver = CompanyResolver(company_repo, tushare_client)
+        session_factory = SessionLocal
+
         nodes = WorkflowNodes(
             supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
             data_agent=DataAgent(),
             analysis_agent=AnalysisAgent(),
             report_agent=ReportAgent(),
             reflection_agent=ReflectionAgent(),
+            company_profile_fetch_skill=CompanyProfileFetchSkill(company_resolver, session_factory)
         )
 
     return WorkflowGraph(
@@ -334,4 +364,5 @@ def build_workflow_graph(
 
 
 def _enum_value(value: Any) -> Any:
+    """返回枚举的原始值；非枚举对象保持不变。"""
     return value.value if hasattr(value, "value") else value

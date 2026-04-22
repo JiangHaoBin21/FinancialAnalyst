@@ -26,6 +26,8 @@ class CompanyResolver:
                 company = self.company_repo.get_by_name(db, company_name)
             except MultipleResultsFound as e:
                 raise MultiRecordException("数据库中存在重复的公司名称，请给出完整的股票代码") from e
+        else:
+            raise CompanyNotFoundError("公司名称和股票代码为空，请给出公司名称或股票代码")
 
         if company:
            return {

@@ -1,9 +1,12 @@
-"""LangGraph node implementations."""
+"""LangGraph 节点实现。"""
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
+from sqlalchemy.exc import MultipleResultsFound
+
+from app.exceptions.data_exception import CompanyNotFoundError
 from app.workflows.state import (
     DATA_PART_BALANCE,
     DATA_PART_CASHFLOW,
@@ -25,7 +28,7 @@ from app.workflows.state import (
 
 
 class WorkflowNodes:
-    """Node collection used by the LangGraph builder."""
+    """供 LangGraph 构建器注册的节点集合。"""
 
     def __init__(
         self,
@@ -34,18 +37,21 @@ class WorkflowNodes:
         analysis_agent: Optional[Any] = None,
         report_agent: Optional[Any] = None,
         reflection_agent: Optional[Any] = None,
+        company_profile_fetch_skill: Optional[Any] = None,
     ):
         self.supervisor_agent = supervisor_agent
         self.data_agent = data_agent
         self.analysis_agent = analysis_agent
         self.report_agent = report_agent
         self.reflection_agent = reflection_agent
+        self.company_profile_fetch_skill = company_profile_fetch_skill
 
     # =========================
-    # Agent-level nodes
+    # Agent 级节点
     # =========================
 
     def supervisor_node(self, state: WorkflowState) -> dict:
+        """运行 SupervisorAgent，并记录本轮调度结果。"""
         try:
             update = self.supervisor_agent.run(state)
         except Exception as exc:
@@ -70,6 +76,7 @@ class WorkflowNodes:
         }
 
     def await_user_input_node(self, state: WorkflowState) -> dict:
+        """暂停工作流，等待用户补充缺失信息。"""
         message = state.get("assistant_message") or (
             "I need more information before continuing the analysis."
         )
@@ -90,6 +97,7 @@ class WorkflowNodes:
         }
 
     def data_planner_node(self, state: WorkflowState) -> dict:
+        """运行 DataAgent，规划后续需要并行抓取的数据分片。"""
         if self.data_agent is None:
             return self._node_error(
                 state=state,
@@ -136,7 +144,35 @@ class WorkflowNodes:
             ],
         }
 
+    def prepare_company_context_node(self, state: WorkflowState) -> dict:
+        """抓取公司基础画像数据。"""
+        print("[DataNode] 解析公司ts_code和公司名...")
+        company_name = state.get("company_name")
+        ts_code = state.get("ts_code")
+        try:
+            company_profile = self.company_profile_fetch_skill.fetch(company_name, ts_code)
+        except MultipleResultsFound as e:
+            return self._node_error(
+                state=state,
+                node_step=WorkflowStep.DATA,
+                agent_name="DataAgent",
+                message=f"DataAgent failed: {type(e).__name__}: {e}",
+            )
+        except CompanyNotFoundError as e:
+            return self._node_error(
+                state=state,
+                node_step=WorkflowStep.DATA,
+                agent_name="DataAgent",
+                message=f"DataAgent failed: {type(e).__name__}: {e}",
+            )
+        return {
+            "ts_code": company_profile["ts_code"],
+            "company_name": company_profile["name"],
+            "company_profile": company_profile
+        }
+
     def analysis_node(self, state: WorkflowState) -> dict:
+        """执行分析阶段的计划步骤。"""
         return self._execute_agent_plan_step(
             state=state,
             node_step=WorkflowStep.ANALYSIS,
@@ -147,6 +183,7 @@ class WorkflowNodes:
         )
 
     def report_node(self, state: WorkflowState) -> dict:
+        """执行报告生成阶段的计划步骤。"""
         return self._execute_agent_plan_step(
             state=state,
             node_step=WorkflowStep.REPORT,
@@ -157,6 +194,7 @@ class WorkflowNodes:
         )
 
     def reflection_node(self, state: WorkflowState) -> dict:
+        """执行反思检查阶段的计划步骤。"""
         return self._execute_agent_plan_step(
             state=state,
             node_step=WorkflowStep.REFLECTION,
@@ -167,22 +205,13 @@ class WorkflowNodes:
         )
 
     # =========================
-    # Parallel data fetch nodes
+    # 并行数据抓取节点
     # =========================
 
-    def fetch_company_profile_node(self, state: WorkflowState) -> dict:
-        print("[DataNode] fetch_company_profile...")
-        company_name = state.get("company_name") or "MockCompany"
-        ts_code = state.get("ts_code") or "000001.SZ"
-        payload = {
-            "company_name": company_name,
-            "ts_code": ts_code,
-            "industry": "Mock Industry",
-        }
-        return self._data_part_update(DATA_PART_COMPANY_PROFILE, payload)
-
     def fetch_income_statement_node(self, state: WorkflowState) -> dict:
-        print("[DataNode] fetch_income_statement...")
+        """抓取利润表数据。"""
+        print("[DataNode] 检索利润表数据表...")
+
         payload = {
             "revenue": [100, 120, 150],
             "net_profit": [20, 25, 32],
@@ -190,6 +219,7 @@ class WorkflowNodes:
         return self._data_part_update(DATA_PART_INCOME, payload)
 
     def fetch_balance_sheet_node(self, state: WorkflowState) -> dict:
+        """抓取资产负债表数据。"""
         print("[DataNode] fetch_balance_sheet...")
         payload = {
             "assets": [200, 230, 260],
@@ -198,6 +228,7 @@ class WorkflowNodes:
         return self._data_part_update(DATA_PART_BALANCE, payload)
 
     def fetch_cashflow_statement_node(self, state: WorkflowState) -> dict:
+        """抓取现金流量表数据。"""
         print("[DataNode] fetch_cashflow_statement...")
         payload = {
             "operating_cashflow": [18, 26, 35],
@@ -206,6 +237,7 @@ class WorkflowNodes:
         return self._data_part_update(DATA_PART_CASHFLOW, payload)
 
     def fetch_financial_indicator_node(self, state: WorkflowState) -> dict:
+        """抓取核心财务指标数据。"""
         print("[DataNode] fetch_financial_indicator...")
         payload = {
             "gross_margin": [0.28, 0.30, 0.32],
@@ -215,8 +247,10 @@ class WorkflowNodes:
         return self._data_part_update(DATA_PART_INDICATORS, payload)
 
     def data_merge_node(self, state: WorkflowState) -> dict:
+        """校验并合并所有并行数据抓取节点的结果。"""
         required_parts = set(state.get("required_data_parts", []))
         results = state.get("data_part_results", [])
+        # 按数据分片名称索引成功结果，便于检查缺失分片。
         result_by_part = {
             result.part_name: result
             for result in results
@@ -232,9 +266,7 @@ class WorkflowNodes:
                 message="Missing data parts: " + ", ".join(missing_parts),
             )
 
-        company_profile = (
-            result_by_part.get(DATA_PART_COMPANY_PROFILE, DataPartResult(DATA_PART_COMPANY_PROFILE, {})).payload
-        )
+        company_profile = state.get("company_profile", {})
         financial_data = {
             part_name: result.payload
             for part_name, result in result_by_part.items()
@@ -275,10 +307,11 @@ class WorkflowNodes:
         }
 
     # =========================
-    # Terminal nodes
+    # 终态节点
     # =========================
 
     def finish_node(self, state: WorkflowState) -> dict:
+        """生成工作流完成状态。"""
         final_response = state.get("final_report") or state.get("final_response")
         message = state.get("assistant_message") or "Workflow finished."
         return {
@@ -299,6 +332,7 @@ class WorkflowNodes:
         }
 
     def error_node(self, state: WorkflowState) -> dict:
+        """生成工作流错误状态。"""
         message = state.get("assistant_message") or state.get("error_message") or (
             "Workflow execution failed."
         )
@@ -319,7 +353,7 @@ class WorkflowNodes:
         }
 
     # =========================
-    # Internal helpers
+    # 内部辅助函数
     # =========================
 
     def _execute_agent_plan_step(
@@ -331,6 +365,7 @@ class WorkflowNodes:
         success_status: WorkflowStatus,
         default_success_message: str,
     ) -> dict:
+        """执行一个受计划约束的 Agent 步骤，并统一处理跳转和错误。"""
         if agent is None:
             return self._node_error(
                 state=state,
@@ -363,6 +398,7 @@ class WorkflowNodes:
             )
 
         merged = {**state_for_agent, **agent_update}
+        # Agent 可以主动请求补充信息，此时工作流暂停到等待用户输入节点。
         if merged.get("next_step") == WorkflowStep.AWAIT_USER_INPUT:
             return {
                 **agent_update,
@@ -379,6 +415,7 @@ class WorkflowNodes:
                 ],
             }
 
+        # Agent 可以要求回到 Supervisor 重新规划后续步骤。
         if merged.get("next_step") == WorkflowStep.SUPERVISOR:
             return {
                 **agent_update,
@@ -395,6 +432,7 @@ class WorkflowNodes:
                 ],
             }
 
+        # 错误状态会标记当前计划步骤失败，并交给错误节点收尾。
         if merged.get("next_step") == WorkflowStep.ERROR or merged.get("has_error"):
             update = {
                 **agent_update,
@@ -417,6 +455,7 @@ class WorkflowNodes:
                 ],
             }
 
+        # 正常完成时推进计划索引，并把 next_step 指向下一类节点。
         plan_update = complete_current_plan_step(state_for_agent)
         message = agent_update.get("assistant_message") or default_success_message
         return {
@@ -441,6 +480,7 @@ class WorkflowNodes:
 
     @staticmethod
     def _data_part_update(part_name: str, payload: Any) -> dict:
+        """把单个数据分片结果包装成 LangGraph 可合并的局部更新。"""
         return {
             "data_part_results": [
                 DataPartResult(
@@ -468,6 +508,7 @@ class WorkflowNodes:
         agent_name: str,
         message: str,
     ) -> dict:
+        """构造节点失败时的统一状态更新。"""
         return {
             **error_update(message),
             **fail_current_plan_step(state),
@@ -483,10 +524,12 @@ class WorkflowNodes:
 
 
 def _enum_value(value: Any) -> Any:
+    """返回枚举的原始值；非枚举对象保持不变。"""
     return value.value if hasattr(value, "value") else value
 
 
 def _payload_count(payload: Any) -> int:
+    """估算数据载荷中的记录数量，用于数据汇总元信息。"""
     if isinstance(payload, dict):
         lengths = [len(value) for value in payload.values() if isinstance(value, list)]
         return max(lengths) if lengths else len(payload)
