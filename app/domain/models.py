@@ -77,7 +77,7 @@ class DataCompletenessResult:
     missing_parts: list[str]
 
     expected_periods: list[str]
-    part_details: dict[str, PartCompletenessDetail]
+    part_details: list[PartCompletenessDetail]
 
     has_missing_data: bool
     completeness_reason: str

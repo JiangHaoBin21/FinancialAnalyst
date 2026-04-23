@@ -25,6 +25,7 @@ from app.workflows.state import (
     is_current_plan_agent,
     update_current_plan_step_status,
 )
+from collections import defaultdict
 
 
 class WorkflowNodes:
@@ -38,6 +39,8 @@ class WorkflowNodes:
         report_agent: Optional[Any] = None,
         reflection_agent: Optional[Any] = None,
         company_profile_fetch_skill: Optional[Any] = None,
+        data_preparation_skill: Optional[Any] = None,
+        completeness_checker_skill: Optional[Any] = None,
     ):
         self.supervisor_agent = supervisor_agent
         self.data_agent = data_agent
@@ -45,6 +48,8 @@ class WorkflowNodes:
         self.report_agent = report_agent
         self.reflection_agent = reflection_agent
         self.company_profile_fetch_skill = company_profile_fetch_skill
+        self.data_preparation_skill = data_preparation_skill
+        self.completeness_checker_skill = completeness_checker_skill
 
     # =========================
     # Agent 级节点
@@ -210,101 +215,135 @@ class WorkflowNodes:
 
     def fetch_income_statement_node(self, state: WorkflowState) -> dict:
         """抓取利润表数据。"""
-        print("[DataNode] 检索利润表数据表...")
-
-        payload = {
-            "revenue": [100, 120, 150],
-            "net_profit": [20, 25, 32],
-        }
+        if state.get("need_backfill"):
+            print("[DataNode][TuShare回源] 回源拉取利润表数据并落库...")
+        else:
+            print("[DataNode] 检索利润表数据表...")
+        payload = self.data_preparation_skill.prepare(
+            time_range=state.get("time_range"),
+            required_parts=[DATA_PART_INCOME],
+            company_profile=state.get("company_profile"),
+            backfill=state.get("need_backfill"),
+        )
         return self._data_part_update(DATA_PART_INCOME, payload)
 
     def fetch_balance_sheet_node(self, state: WorkflowState) -> dict:
         """抓取资产负债表数据。"""
-        print("[DataNode] fetch_balance_sheet...")
-        payload = {
-            "assets": [200, 230, 260],
-            "liabilities": [80, 90, 100],
-        }
+        if state.get("need_backfill"):
+            print("[DataNode][TuShare回源] 回源拉取资产负债表数据并落库...")
+        else:
+            print("[DataNode] 检索资产负债表数据表...")
+        payload = self.data_preparation_skill.prepare(
+            time_range=state.get("time_range"),
+            required_parts=[DATA_PART_BALANCE],
+            company_profile=state.get("company_profile"),
+            backfill=state.get("need_backfill"),
+        )
         return self._data_part_update(DATA_PART_BALANCE, payload)
 
     def fetch_cashflow_statement_node(self, state: WorkflowState) -> dict:
         """抓取现金流量表数据。"""
-        print("[DataNode] fetch_cashflow_statement...")
-        payload = {
-            "operating_cashflow": [18, 26, 35],
-            "free_cashflow": [10, 16, 22],
-        }
+        if state.get("need_backfill"):
+            print("[DataNode][TuShare回源] 回源拉取现金流量表数据并落库...")
+        else:
+            print("[DataNode] 检索现金流量表数据表...")
+        payload = self.data_preparation_skill.prepare(
+            time_range=state.get("time_range"),
+            required_parts=[DATA_PART_CASHFLOW],
+            company_profile=state.get("company_profile"),
+            backfill=state.get("need_backfill"),
+        )
         return self._data_part_update(DATA_PART_CASHFLOW, payload)
 
     def fetch_financial_indicator_node(self, state: WorkflowState) -> dict:
         """抓取核心财务指标数据。"""
-        print("[DataNode] fetch_financial_indicator...")
-        payload = {
-            "gross_margin": [0.28, 0.30, 0.32],
-            "net_margin": [0.20, 0.21, 0.213],
-            "debt_to_asset": [0.40, 0.391, 0.385],
-        }
+        if state.get("need_backfill"):
+            print("[DataNode][TuShare回源] 回源拉取核心财务指标数据并落库...")
+        else:
+            print("[DataNode] 检索核心财务指标数据表...")
+        payload = self.data_preparation_skill.prepare(
+            time_range=state.get("time_range"),
+            required_parts=[DATA_PART_INDICATORS],
+            company_profile=state.get("company_profile"),
+            backfill=state.get("need_backfill"),
+        )
         return self._data_part_update(DATA_PART_INDICATORS, payload)
 
     def data_merge_node(self, state: WorkflowState) -> dict:
         """校验并合并所有并行数据抓取节点的结果。"""
-        required_parts = set(state.get("required_data_parts", []))
+        print("[DataNode] 并行节点数据结果合并...")
+        required_parts = state.get("required_data_parts", [])
         results = state.get("data_part_results", [])
-        # 按数据分片名称索引成功结果，便于检查缺失分片。
-        result_by_part = {
-            result.part_name: result
-            for result in results
-            if result.success
-        }
 
-        missing_parts = sorted(required_parts - set(result_by_part))
-        if missing_parts:
-            return self._node_error(
-                state=state,
-                node_step=WorkflowStep.DATA,
-                agent_name="DataMerge",
-                message="Missing data parts: " + ", ".join(missing_parts),
-            )
+        financial_data = defaultdict(list)
+        for result in results:
+            financial_data[result.part_name].append(result.payload)
 
-        company_profile = state.get("company_profile", {})
-        financial_data = {
-            part_name: result.payload
-            for part_name, result in result_by_part.items()
-            if part_name != DATA_PART_COMPANY_PROFILE
-        }
-        data_summary = {
-            "message": "Financial data prepared by parallel LangGraph data nodes.",
-            "required_parts": sorted(required_parts),
-            "fetched_parts": sorted(result_by_part),
-            "record_counts": {
-                part_name: _payload_count(result.payload)
-                for part_name, result in result_by_part.items()
-            },
-        }
-
-        plan_update = complete_current_plan_step(state)
         return {
-            **plan_update,
-            "current_stage": WorkflowStep.DATA,
-            "status": WorkflowStatus.DATA_READY,
-            "company_profile": company_profile,
             "financial_data": financial_data,
-            "data_summary": data_summary,
-            "assistant_message": "Data stage completed with parallel fetch nodes.",
             "execution_history": [
                 execution_record(
                     step=WorkflowStep.DATA.value,
-                    agent="DataMerge",
+                    agent="DataNode:merge node",
                     success=True,
-                    message="Merged parallel data results.",
-                    metadata={
-                        "required_parts": sorted(required_parts),
-                        "fetched_parts": sorted(result_by_part),
-                        "next_step": _enum_value(plan_update.get("next_step")),
-                    },
+                    message="合并并行数据结果",
+                    metadata={"part_name": "all"},
                 )
-            ],
+            ]
         }
+
+        # plan_update = complete_current_plan_step(state)
+        # return {
+        #     **plan_update,
+        #     "current_stage": WorkflowStep.DATA,
+        #     "status": WorkflowStatus.DATA_READY,
+        #     "company_profile": company_profile,
+        #     "financial_data": financial_data,
+        #     "data_summary": data_summary,
+        #     "assistant_message": "Data stage completed with parallel fetch nodes.",
+        #     "execution_history": [
+        #         execution_record(
+        #             step=WorkflowStep.DATA.value,
+        #             agent="DataMerge",
+        #             success=True,
+        #             message="Merged parallel data results.",
+        #             metadata={
+        #                 "required_parts": sorted(required_parts),
+        #                 "fetched_parts": sorted(result_by_part),
+        #                 "next_step": _enum_value(plan_update.get("next_step")),
+        #             },
+        #         )
+        #     ],
+        # }
+
+    def completeness_check_node(self, state: WorkflowState) -> dict:
+        """执行完整性检查阶段的计划步骤。"""
+        print("[DataNode] 检查合并后数据是否完整...")
+        completeness_check_result = self.company_profile_fetch_skill.skill_check(
+            requested_time_range=state.get("time_range"),
+            financial_data=state.get("financial_data"),
+            required_parts=state.get("required_data_parts")
+        )
+        return {
+            "completeness_check_result": completeness_check_result,
+            "execution_history": [
+                execution_record(
+                    step=WorkflowStep.DATA.value,
+                    agent="DataNode:completeness check",
+                    success=True,
+                    message="数据完整性检查"
+                )
+            ]
+        }
+
+    def backfill_planner_node(self, state: WorkflowState) -> dict:
+        """执行回源计划步骤。"""
+        print("[DataNode] 判定是否需要回源...")
+        if state.get("data_completeness_check_result")["has_missing_data"]:
+            print("[DataNode] 需要回源...")
+            already_backfill = int(state.get("already_backfill")) + 1
+
+
 
     # =========================
     # 终态节点

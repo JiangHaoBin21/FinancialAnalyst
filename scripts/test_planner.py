@@ -1,38 +1,29 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
 from app.llms.openai_client import OpenAIClient
 from app.skills.planning.planning_skill import PlanningSkill
 
 
-def test_planner():
+def main() -> None:
     llm_client = OpenAIClient()
     planner = PlanningSkill(llm_client)
 
     test_cases = [
-        # 1. 正常财务分析
-        # "帮我分析一下宁德时代近五年的财务表现",
-
-        # # 2. 用 ts_code
-        # "分析 000001.SZ 最近三年的财务情况",
-        #
-        # # 3. 要 summary
-        # "帮我简单总结一下比亚迪最近两年的财务表现",
-        #
-        # # 4. 缺公司
-        # "帮我查一下比亚迪最近三年的财务数据",
-        #
-        # # 5. 模糊任务
-        # "这个公司怎么样",
-        #
-        # # 6. 非财务任务
-        # "今天天气怎么样",
-        # 7. 非标准财务任务
-        # "看看宁德时代近几年赚不赚钱，以及负债有没有风险"
-        # "宁德时代这支股票能买吗"
-        "给我宁德时代近五年的收入数据"
+        "\u7ed9\u6211\u5b81\u5fb7\u65f6\u4ee3\u8fd1\u4e94\u5e74\u7684\u6536\u5165\u6570\u636e",
     ]
 
-    for i, query in enumerate(test_cases, 1):
+    for index, query in enumerate(test_cases, 1):
         print("\n" + "=" * 50)
-        print(f"[Test Case {i}] 用户输入: {query}")
+        print(f"[Test Case {index}] user_query: {query}")
 
         result = planner.plan_financial_task(query)
 
@@ -52,9 +43,8 @@ def test_planner():
         print(result.planner_message)
 
         print("\n--- raw_response ---")
-        # print(result.raw_response[:300], "...")  # 防止太长
         print(result.raw_response)
 
 
 if __name__ == "__main__":
-    test_planner()
+    main()

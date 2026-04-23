@@ -1,155 +1,173 @@
-# scripts/test_data_preparation_flow.py
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from pprint import pprint
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
 from app.core.config import settings
-from app.core.database import SessionLocal  # 按你的真实路径修改
-from app.services.tushare_service import TushareService, TushareServiceConfig
-
+from app.core.database import SessionLocal
+from app.domain.models import TimeRange
+from app.repositories.balance_repo import BalanceSheetRepository
+from app.repositories.cashflow_repo import CashFlowRepository
 from app.repositories.company_repo import CompanyRepository
-from app.repositories.indicator_repo import FinaIndicatorRepository  # 按你的真实类名修改
-
-from app.domain.models import TimeRange  # 按你的真实路径修改
+from app.repositories.income_repo import IncomeRepository
+from app.repositories.indicator_repo import FinaIndicatorRepository
+from app.services.tushare_service import TushareService, TushareServiceConfig
 from app.skills.capabilities.company_resolver import CompanyResolver
-from app.skills.capabilities.time_range_parser import TimeRangeParser
 from app.skills.capabilities.data_completeness_checker import DataCompletenessChecker
+from app.skills.capabilities.time_range_parser import TimeRangeParser
+from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
+from app.skills.data.completeness_check_skill import CompletenessCheckSkill
+from app.skills.data.data_preparation_skill import DataPreparationSkill
 
 
-def main() -> None:
-    # ========= 1) 基础依赖 =========
-    db = SessionLocal()
-
-    tushare_service = TushareService(
-        TushareServiceConfig(token=settings.TuShare_Token)
-    )
-
+def build_skills() -> tuple[CompanyProfileFetchSkill, DataPreparationSkill, CompletenessCheckSkill]:
     company_repo = CompanyRepository()
-    indicator_repo = FinaIndicatorRepository()  # 按你的真实类名修改
+    income_repo = IncomeRepository()
+    balance_repo = BalanceSheetRepository()
+    cashflow_repo = CashFlowRepository()
+    indicator_repo = FinaIndicatorRepository()
 
+    tushare_service = TushareService(TushareServiceConfig(token=settings.TuShare_Token))
     company_resolver = CompanyResolver(
         company_repo=company_repo,
         tushare_service=tushare_service,
     )
-    time_range_parser = TimeRangeParser()
-    completeness_checker = DataCompletenessChecker()
 
-    try:
-        # ========= 2) 输入 =========
-        company_name = "宁德时代"
-        ts_code = None
-        time_range = TimeRange(
-            start_year=2022,
-            start_month=1,
-            end_year=2024,
-            end_month=12,
+    company_profile_fetch_skill = CompanyProfileFetchSkill(
+        company_resolver=company_resolver,
+        session_factory=SessionLocal,
+    )
+    data_preparation_skill = DataPreparationSkill(
+        time_range_parser=TimeRangeParser(),
+        income_repo=income_repo,
+        indicator_repo=indicator_repo,
+        cashflow_repo=cashflow_repo,
+        balance_repo=balance_repo,
+        tushare_service=tushare_service,
+        session_factory=SessionLocal,
+    )
+    completeness_check_skill = CompletenessCheckSkill(DataCompletenessChecker())
+    return company_profile_fetch_skill, data_preparation_skill, completeness_check_skill
+
+
+def load_financial_data(
+    skill: DataPreparationSkill,
+    *,
+    company_profile: dict,
+    time_range: TimeRange,
+    required_parts: list[str],
+) -> dict[str, list[dict]]:
+    financial_data: dict[str, list[dict]] = {}
+    for part_name in required_parts:
+        financial_data[part_name] = skill.prepare(
+            time_range=time_range,
+            required_parts=[part_name],
+            company_profile=company_profile,
         )
+    return financial_data
 
-        print("\n===== STEP 1: Resolve company =====")
-        company_profile = company_resolver.resolve(
-            db=db,
-            company_name=company_name,
-            ts_code=ts_code,
+
+def build_backfill_plan(check_result: dict) -> dict[str, list[str]]:
+    plan: dict[str, list[str]] = {}
+    for detail in check_result.get("part_details", []):
+        missing_periods = detail.get("missing_periods") or []
+        if missing_periods:
+            plan[detail["part_name"]] = missing_periods
+    return plan
+
+
+def print_data_summary(financial_data: dict[str, list[dict]]) -> None:
+    print("\n===== Financial Data Summary =====")
+    for part_name, records in financial_data.items():
+        periods = sorted(
+            {
+                str(record.get("end_date"))
+                for record in records
+                if record.get("end_date") is not None
+            }
         )
-        pprint(company_profile)
-        company_source = company_profile.get("source")
-        print("company_source =", company_source)
+        print(f"{part_name}: count={len(records)}, periods={periods}")
 
-        print("\n===== STEP 2: Parse time range =====")
-        parsed_range = time_range_parser.parse(time_range)
-        # 这里假设你 ParsedTimeRange 有下面这些字段
-        print("start_date_obj =", parsed_range.start_date_obj)
-        print("end_date_obj   =", parsed_range.end_date_obj)
-        print("start_date_str =", parsed_range.start_date_str)
-        print("end_date_str   =", parsed_range.end_date_str)
 
-        print("\n===== STEP 3: Query local fina_indicator =====")
-        # 这里的方法名按你的 repo 实际接口改
-        local_indicators = indicator_repo.list_by_ts_code_and_date_range(
-            db=db,
-            ts_code=company_profile["ts_code"],
-            start_date=parsed_range.start_date_obj,
-            end_date=parsed_range.end_date_obj,
+def main() -> None:
+    company_profile_fetch_skill, data_preparation_skill, completeness_check_skill = build_skills()
+
+    company_name = None
+    ts_code = "300750.SZ"
+    time_range = TimeRange(
+        start_year=2022,
+        start_month=1,
+        end_year=2024,
+        end_month=12,
+    )
+    required_parts = ["financial_indicators"]
+
+    print("===== INPUT =====")
+    print(f"company_name: {company_name}")
+    print(f"ts_code: {ts_code}")
+    print(f"time_range: {time_range}")
+    print(f"required_parts: {required_parts}")
+
+    print("\n===== STEP 1: Fetch company profile =====")
+    company_profile = company_profile_fetch_skill.fetch(company_name, ts_code)
+    pprint(company_profile)
+
+    print("\n===== STEP 2: Load local financial data =====")
+    financial_data = load_financial_data(
+        data_preparation_skill,
+        company_profile=company_profile,
+        time_range=time_range,
+        required_parts=required_parts,
+    )
+    print_data_summary(financial_data)
+
+    print("\n===== STEP 3: Check completeness =====")
+    completeness = completeness_check_skill.skill_check(
+        requested_time_range=time_range,
+        financial_data=financial_data,
+        required_parts=required_parts,
+    )
+    pprint(completeness)
+
+    backfill_plan = build_backfill_plan(completeness)
+    if backfill_plan:
+        print("\n===== STEP 4: Backfill missing periods =====")
+        pprint(backfill_plan)
+        fetched_records = data_preparation_skill.prepare(
+            time_range=time_range,
+            required_parts=required_parts,
+            company_profile=company_profile,
+            backfill=backfill_plan,
         )
+        print(f"backfilled records: {len(fetched_records)}")
 
-        print(f"local_indicators count = {len(local_indicators)}")
-
-        local_financial_data = {
-            "income_statements": [],
-            "balance_sheets": [],
-            "cashflow_statements": [],
-            "financial_indicators": local_indicators,
-        }
-
-        print("\n===== STEP 4: Check completeness =====")
-        completeness = completeness_checker.check(
+        print("\n===== STEP 5: Re-load and re-check =====")
+        financial_data = load_financial_data(
+            data_preparation_skill,
+            company_profile=company_profile,
+            time_range=time_range,
+            required_parts=required_parts,
+        )
+        print_data_summary(financial_data)
+        completeness = completeness_check_skill.skill_check(
             requested_time_range=time_range,
-            financial_data=local_financial_data,
+            financial_data=financial_data,
+            required_parts=required_parts,
         )
         pprint(completeness)
+    else:
+        print("\n===== STEP 4: Backfill skipped =====")
+        print("local data is complete for requested parts and range")
 
-        print("\n===== STEP 5: Fetch from tushare if needed =====")
-        if completeness.needs_backfill:
-            fetched_indicator_records = tushare_service.get_fina_indicator_records(
-                ts_code=company_profile["ts_code"],
-                start_date=parsed_range.start_date_str,
-                end_date=parsed_range.end_date_str,
-            )
-            print(f"fetched_indicator_records count = {len(fetched_indicator_records)}")
-            print(fetched_indicator_records)
-
-            print("\n===== STEP 6: Persist fetched records =====")
-            # 这里的方法名按你的 repo 实际接口改
-            # 如果你没有 bulk_upsert，就先循环 upsert
-            indicator_repo.bulk_upsert(db=db, data=fetched_indicator_records)
-
-            db.commit()
-            print("persist success")
-
-        else:
-            print("local data is sufficient, skip tushare fetch")
-
-        print("\n===== STEP 7: Re-query from DB for verification =====")
-        final_indicators = indicator_repo.list_by_ts_code_and_date_range(
-            db=db,
-            ts_code=company_profile["ts_code"],
-            start_date=parsed_range.start_date_obj,
-            end_date=parsed_range.end_date_obj,
-        )
-
-        print(f"final_indicators count = {len(final_indicators)}")
-
-        if final_indicators:
-            sample = final_indicators[0]
-            print({
-                "ts_code": sample.ts_code,
-                "end_date": sample.end_date,
-                "ann_date": sample.ann_date,
-                "roe": sample.roe,
-                "gross_margin": sample.gross_margin,
-                "debt_to_assets": sample.debt_to_assets,
-                "source": sample.source,
-            })
-
-        print("\nFetched end_dates:")
-        print([r["end_date"] for r in fetched_indicator_records])
-
-        print("\nFetched distinct end_dates:")
-        print(sorted({r["end_date"] for r in fetched_indicator_records}))
-
-        print("\nFinal DB end_dates:")
-        print([x.end_date for x in final_indicators])
-
-        print("\n===== DONE =====")
-        print("Minimal data flow test completed successfully.")
-
-    except Exception as e:
-        db.rollback()
-        print("\n===== ERROR =====")
-        print(repr(e))
-        raise
-    finally:
-        db.close()
+    print("\n===== DONE =====")
+    print("Data preparation flow script completed successfully.")
 
 
 if __name__ == "__main__":

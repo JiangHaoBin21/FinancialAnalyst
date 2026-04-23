@@ -5,14 +5,21 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from app.core.database import SessionLocal
+from app.repositories.balance_repo import BalanceSheetRepository
+from app.repositories.cashflow_repo import CashFlowRepository
+from app.repositories.income_repo import IncomeRepository
+from app.repositories.indicator_repo import FinaIndicatorRepository
 from app.services.tushare_service import TushareService
 from app.skills.capabilities.company_resolver import CompanyResolver
+from app.skills.capabilities.data_completeness_checker import DataCompletenessChecker
+from app.skills.capabilities.time_range_parser import TimeRangeParser
 from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
+from app.skills.data.completeness_check_skill import CompletenessCheckSkill
+from app.skills.data.data_preparation_skill import DataPreparationSkill
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.state import (
     DATA_PART_BALANCE,
     DATA_PART_CASHFLOW,
-    DATA_PART_COMPANY_PROFILE,
     DATA_PART_INCOME,
     DATA_PART_INDICATORS,
     WorkflowState,
@@ -145,6 +152,7 @@ class WorkflowGraph:
         builder.add_node("fetch_cashflow_statement", self._wrap_node(self.nodes.fetch_cashflow_statement_node))
         builder.add_node("fetch_financial_indicator", self._wrap_node(self.nodes.fetch_financial_indicator_node))
         builder.add_node("data_merge", self._wrap_node(self.nodes.data_merge_node))
+        builder.add_node("completeness_check", self._wrap_node(self.nodes.completeness_check_node))
         builder.add_node("analysis", self._wrap_node(self.nodes.analysis_node))
         builder.add_node("report", self._wrap_node(self.nodes.report_node))
         builder.add_node("reflection", self._wrap_node(self.nodes.reflection_node))
@@ -166,7 +174,8 @@ class WorkflowGraph:
         ):
             builder.add_edge(fetch_node, "data_merge")
 
-        builder.add_conditional_edges("data_merge", self._route_after_node, self._route_path_map(END))
+        # builder.add_conditional_edges("data_merge", self._route_after_node, self._route_path_map(END))
+        builder.add_edge("data_merge", "completeness_check")
         for node_name in ("analysis", "report", "reflection"):
             builder.add_conditional_edges(node_name, self._route_after_node, self._route_path_map(END))
 
@@ -261,16 +270,31 @@ class WorkflowGraph:
         if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
             return ["error"]
 
-        routes = [
-            part
-            for part in state.get("required_data_parts", [])
-            if part in {
-                DATA_PART_INCOME,
-                DATA_PART_BALANCE,
-                DATA_PART_CASHFLOW,
-                DATA_PART_INDICATORS,
-            }
-        ]
+        if state.get("need_backfill"):
+            if int(state.get("already_backfill")) <= 2:
+                routes = [
+                    part
+                    for part in state.get("need_backfill").keys()
+                    if part in {
+                        DATA_PART_INCOME,
+                        DATA_PART_BALANCE,
+                        DATA_PART_CASHFLOW,
+                        DATA_PART_INDICATORS,
+                    }
+                ]
+            else:
+                return ["data_finalize"]
+        else:
+            routes = [
+                part
+                for part in state.get("required_data_parts", [])
+                if part in {
+                    DATA_PART_INCOME,
+                    DATA_PART_BALANCE,
+                    DATA_PART_CASHFLOW,
+                    DATA_PART_INDICATORS,
+                }
+            ]
         return routes or ["data_merge"]
 
     @staticmethod
@@ -341,11 +365,20 @@ def build_workflow_graph(
 
         llm_client = llm_client or OpenAIClient()
         planning_skill = PlanningSkill(llm_client=llm_client)
+
         company_repo = CompanyRepository()
+        income_repo = IncomeRepository()
+        indicator_repo = FinaIndicatorRepository()
+        cashflow_repo = CashFlowRepository()
+        balance_repo = BalanceSheetRepository()
+
         config = TushareServiceConfig(settings.TuShare_Token)
         tushare_client = TushareService(config)
         company_resolver = CompanyResolver(company_repo, tushare_client)
         session_factory = SessionLocal
+        time_range_parser = TimeRangeParser()
+        completeness_checker_capability = DataCompletenessChecker()
+        completeness_checker_skill = CompletenessCheckSkill(completeness_checker_capability)
 
         nodes = WorkflowNodes(
             supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
@@ -353,7 +386,17 @@ def build_workflow_graph(
             analysis_agent=AnalysisAgent(),
             report_agent=ReportAgent(),
             reflection_agent=ReflectionAgent(),
-            company_profile_fetch_skill=CompanyProfileFetchSkill(company_resolver, session_factory)
+            company_profile_fetch_skill=CompanyProfileFetchSkill(company_resolver, session_factory),
+            data_preparation_skill=DataPreparationSkill(
+                time_range_parser=time_range_parser,
+                income_repo=income_repo,
+                indicator_repo=indicator_repo,
+                cashflow_repo=cashflow_repo,
+                balance_repo=balance_repo,
+                tushare_service=tushare_client,
+                session_factory=session_factory
+            ),
+            completeness_checker_skill=completeness_checker_skill
         )
 
     return WorkflowGraph(

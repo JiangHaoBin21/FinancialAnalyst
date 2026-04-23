@@ -7,16 +7,16 @@ from app.utils.date_utils import generate_quarter_ends
 class DataCompletenessChecker:
     """检查数据是否完整，覆盖的季度是否足够"""
 
-    def __init__(self) -> None:
-        self.CORE_FINANCIAL_PARTS = settings.CORE_FINANCIAL_PARTS
-
     def check(
         self,
         requested_time_range: TimeRange | None,
         financial_data: dict[str, Any],
         required_parts: list[str] | None = None,
     ) -> DataCompletenessResult:
-        tables = list(required_parts) if required_parts else self.CORE_FINANCIAL_PARTS.copy()
+        if requested_time_range is None:
+            raise ValueError("requested_time_range is required")
+
+        tables = list(required_parts or financial_data.keys() or settings.CORE_FINANCIAL_PARTS)
 
         requested_start_year_month = (
             f"{requested_time_range.start_year}.{requested_time_range.start_month:02d}"
@@ -36,8 +36,8 @@ class DataCompletenessChecker:
         )
 
         missing_parts = [
-            part_name
-            for part_name, detail in part_details.items()
+            detail.part_name
+            for detail in part_details
             if not detail.is_complete
         ]
 
@@ -57,15 +57,17 @@ class DataCompletenessChecker:
         financial_data: dict[str, Any],
         tables: list[str],
         expected_periods: list[str],
-    ) -> dict[str, PartCompletenessDetail]:
-        part_details: dict[str, PartCompletenessDetail] = {}
+    ) -> list[PartCompletenessDetail]:
 
+        part_details = []
         for part_name in tables:
             records = financial_data.get(part_name) or []
 
             available_periods = []
-            for record in records:
-                end_date = str(record.end_date)
+            for record in self._iter_records(records):
+                end_date = self._extract_end_date(record)
+                if end_date is None:
+                    continue
                 if end_date not in available_periods:
                     available_periods.append(end_date)
 
@@ -76,22 +78,52 @@ class DataCompletenessChecker:
                 if period not in available_periods
             ]
 
-            part_details[part_name] = PartCompletenessDetail(
-                part_name=part_name,
-                available_periods=available_periods,
-                missing_periods=missing_periods,
-                is_complete=(len(missing_periods) == 0),
-                record_count=len(records),
+            part_details.append(
+                PartCompletenessDetail(
+                    part_name=part_name,
+                    available_periods=available_periods,
+                    missing_periods=missing_periods,
+                    is_complete=(len(missing_periods) == 0),
+                    record_count=len(records),
+                )
             )
 
         return part_details
 
+    @classmethod
+    def _iter_records(cls, records: Any):
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, list):
+                    yield from cls._iter_records(record)
+                else:
+                    yield record
+            return
+        yield records
+
+    @staticmethod
+    def _extract_end_date(record: Any) -> str | None:
+        if isinstance(record, dict):
+            end_date = record.get("end_date")
+        else:
+            end_date = getattr(record, "end_date", None)
+
+        if end_date is None:
+            return None
+        if hasattr(end_date, "isoformat"):
+            return end_date.isoformat()
+
+        text = str(end_date).strip()
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+        return text
+
     def get_completeness_reason(
         self,
-        part_details: dict[str, PartCompletenessDetail],
+        part_details: list[PartCompletenessDetail],
     ) -> str:
         incomplete_parts = [
-            detail for detail in part_details.values()
+            detail for detail in part_details
             if not detail.is_complete
         ]
 

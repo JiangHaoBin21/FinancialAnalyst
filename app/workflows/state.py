@@ -118,6 +118,13 @@ class WorkflowState(TypedDict, total=False):
     financial_data: dict[str, Any]
     data_summary: dict[str, Any]
 
+    # 数据检查完整性
+    data_completeness_check_result: dict[str, Any]
+
+    # 是否需要回源补充（数据检查完整性后）
+    need_backfill: dict[str, list[str]]
+    already_backfill: int
+
     # 分析结果
     analysis_result: dict[str, Any]
     analysis_summary: Optional[str]
@@ -187,6 +194,9 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "company_profile": {},
         "financial_data": {},
         "data_summary": {},
+        "data_completeness_check_result": {},
+        "need_backfill": {},
+        "already_backfill": 0,
         "analysis_result": {},
         "analysis_summary": None,
         "report_draft": None,

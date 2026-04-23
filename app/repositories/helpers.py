@@ -6,6 +6,14 @@ from typing import Any, Optional
 from app.core.config import settings
 from requests import Session
 
+from sqlalchemy import inspect
+
+def model_to_dict(model_obj):
+    """
+    将 SQLAlchemy 模型对象转换为字典
+    """
+    return {c.key: getattr(model_obj, c.key) for c in inspect(model_obj).mapper.column_attrs}
+
 
 def should_replace_by_update_flag(
     existing_update_flag: Optional[str],
@@ -60,17 +68,18 @@ def get_records_from_date_and_required_parts(
         end_date_obj: date,
         required_parts: list,
         list_of_repos: list
-) -> dict[str, list]:
-    raw_financial_data = {}
+) -> list[dict]:
+    """封装的根据日期和表明获取记录"""
+    raw_financial_data = []
     for part_name in required_parts:
         if part_name not in settings.CORE_FINANCIAL_PARTS:
             raise ValueError(f"非法的财务数据表名: {part_name}")
         repo = get_repo_or_func_from_part_name(part_name, list_of_repos)
-        raw_financial_data[part_name] = (
-            repo.list_by_ts_code_and_date_range(
-                db=db,
-                ts_code=ts_code,
-                start_date=start_date_obj,
-                end_date=end_date_obj
-            ))
+        for item in repo.list_by_ts_code_and_date_range(
+            db=db,
+            ts_code=ts_code,
+            start_date=start_date_obj,
+            end_date=end_date_obj
+        ):
+            raw_financial_data.append(model_to_dict(item))
     return raw_financial_data
