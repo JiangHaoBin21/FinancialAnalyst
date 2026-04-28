@@ -8,7 +8,7 @@ from app.utils.date_utils import get_last_day_of_month, get_first_day_of_month
 
 
 class TimeRangeParser:
-    def parse(self, time_range: TimeRange | None) -> ParsedTimeRange:
+    def parse(self, time_range: TimeRange) -> ParsedTimeRange:
         start_year_month = f"{time_range.start_year}.{time_range.start_month:02d}"
         end_year_month = f"{time_range.end_year}.{time_range.end_month:02d}"
         start_date_str = get_first_day_of_month(start_year_month)

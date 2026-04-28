@@ -41,6 +41,7 @@ class WorkflowNodes:
         company_profile_fetch_skill: Optional[Any] = None,
         data_preparation_skill: Optional[Any] = None,
         completeness_checker_skill: Optional[Any] = None,
+        backfill_plan_skill: Optional[Any] = None,
     ):
         self.supervisor_agent = supervisor_agent
         self.data_agent = data_agent
@@ -50,6 +51,7 @@ class WorkflowNodes:
         self.company_profile_fetch_skill = company_profile_fetch_skill
         self.data_preparation_skill = data_preparation_skill
         self.completeness_checker_skill = completeness_checker_skill
+        self.backfill_plan_skill = backfill_plan_skill
 
     # =========================
     # Agent 级节点
@@ -338,10 +340,12 @@ class WorkflowNodes:
 
     def backfill_planner_node(self, state: WorkflowState) -> dict:
         """执行回源计划步骤。"""
-        print("[DataNode] 判定是否需要回源...")
         if state.get("data_completeness_check_result")["has_missing_data"]:
-            print("[DataNode] 需要回源...")
-            already_backfill = int(state.get("already_backfill")) + 1
+            print("[DataNode] 数据有缺失，判定是否需要回源...")
+            already_backfill = state.get("already_backfill") + 1
+            if self.backfill_plan_skill.backfill_plan():
+                print(f"[DataNode] 需要回源,当前已回源次数：{already_backfill}次...")
+
 
 
 

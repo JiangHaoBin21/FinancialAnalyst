@@ -18,7 +18,7 @@ def main() -> None:
     planner = PlanningSkill(llm_client)
 
     test_cases = [
-        "\u7ed9\u6211\u5b81\u5fb7\u65f6\u4ee3\u8fd1\u4e94\u5e74\u7684\u6536\u5165\u6570\u636e",
+        "给我宁德时代的收入数据",
     ]
 
     for index, query in enumerate(test_cases, 1):

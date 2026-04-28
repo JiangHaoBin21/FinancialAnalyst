@@ -13,6 +13,8 @@ from app.services.tushare_service import TushareService
 from app.skills.capabilities.company_resolver import CompanyResolver
 from app.skills.capabilities.data_completeness_checker import DataCompletenessChecker
 from app.skills.capabilities.time_range_parser import TimeRangeParser
+from app.skills.data import backfill_plan_skill
+from app.skills.data.backfill_plan_skill import BackfillPlanSkill
 from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.skills.data.completeness_check_skill import CompletenessCheckSkill
 from app.skills.data.data_preparation_skill import DataPreparationSkill
@@ -396,7 +398,8 @@ def build_workflow_graph(
                 tushare_service=tushare_client,
                 session_factory=session_factory
             ),
-            completeness_checker_skill=completeness_checker_skill
+            completeness_checker_skill=completeness_checker_skill,
+            backfill_plan_skill=BackfillPlanSkill(llm_client),
         )
 
     return WorkflowGraph(

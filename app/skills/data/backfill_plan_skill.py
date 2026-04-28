@@ -22,8 +22,10 @@ class BackfillPlanSkill:
         """
         need_backfill = defaultdict(list)
         for part in data_completeness_check_result["part_details"]:
-            if part["is_complete"]:
+            if not part["is_complete"]:
                 need_backfill[part["part_name"]].append(part["missing_periods"])
+        if not need_backfill:
+            return need_backfill
         prompt = ""
         raw_response = self._call_llm(prompt)
         return raw_response

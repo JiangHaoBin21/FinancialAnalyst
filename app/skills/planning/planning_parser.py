@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any, Optional
 
 from app.domain.models import PlanningResult, PlanningStep, TimeRange
@@ -238,10 +239,16 @@ def parse_time_range(value: Any) -> Optional[TimeRange]:
     }
 
     不接受字符串形式的 time_range。
+    若时间范围为空，则返回默认时间间隔：近三年，采用TTM统计口径
     若字段不完整或不合法，返回 None。
     """
     if value is None:
-        return None
+        return TimeRange(
+            start_year=date.today().year - 3,
+            start_month=date.today().month,
+            end_year=date.today().year,
+            end_month=date.today().month,
+        )
 
     if not isinstance(value, dict):
         return None
