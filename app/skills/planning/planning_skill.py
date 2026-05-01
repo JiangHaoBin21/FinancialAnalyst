@@ -9,7 +9,7 @@ from typing import Any
 from app.domain.models import PlanningResult
 from app.skills.planning.planning_parser import parse_planning_result
 from app.skills.planning.planning_policy import finalize_planning_result
-from app.skills.planning.planning_prompt_builder import build_planning_prompt
+from app.skills.planning.planning_prompt_builder import build_planning_prompt, build_system_prompt
 
 
 class PlanningSkill:
@@ -31,20 +31,21 @@ class PlanningSkill:
     def __init__(self, llm_client: Any):
         self.llm_client = llm_client
 
-    def _call_llm(self, prompt: str) -> str:
+    def _call_llm(self, user_prompt: str, system_prompt: str = None) -> str:
         """
         调用大模型。
-        约定 llm_client 提供 generate(prompt: str) -> str 接口。
+        约定 llm_client 提供 generate(user_prompt: str, system_prompt: str) -> str 接口。
         """
-        return self.llm_client.generate(prompt)
+        return self.llm_client.generate(user_prompt, system_prompt)
 
     def generate_raw_plan(self, user_query: str) -> str:
         """
         只负责：
         用户输入 -> prompt -> LLM raw response
         """
-        prompt = build_planning_prompt(user_query)
-        raw_response = self._call_llm(prompt)
+        system_prompt = build_system_prompt()
+        user_prompt = build_planning_prompt(user_query)
+        raw_response = self._call_llm(user_prompt=user_prompt, system_prompt=system_prompt)
         return raw_response
 
     def plan_financial_task(self, user_query: str) -> PlanningResult:

@@ -59,19 +59,26 @@ class OpenAIClient(BaseLLMClient):
         self.client = OpenAI(**client_kwargs)
         self.model = self.config.model
 
-    def generate(self, prompt: str, **kwargs: Any) -> str:
+    def generate(self, user_prompt: str, system_prompt: str = None, **kwargs: Any) -> str:
         """
         单轮文本生成。
 
         这里内部仍然走 chat completions，只是帮上层把 prompt
         自动包装成单条 user message。
         """
-        if not prompt or not prompt.strip():
+        if not user_prompt or not user_prompt.strip():
             raise ValueError("prompt 不能为空")
 
-        messages = [
-            {"role": "user", "content": prompt.strip()}
-        ]
+        if system_prompt:
+            messages = [
+                {"role": "system", "content": system_prompt.strip()},
+                {"role": "user", "content": user_prompt.strip()}
+            ]
+        else:
+            messages = [
+                {"role": "user", "content": user_prompt.strip()}
+            ]
+
         return self.chat(messages=messages, **kwargs)
 
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:

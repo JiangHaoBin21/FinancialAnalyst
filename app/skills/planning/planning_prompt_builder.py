@@ -109,15 +109,11 @@ def _get_current_time():
         "month": now.month
     }
 
-def build_planning_prompt(user_query: str) -> str:
+def build_system_prompt() -> str:
     """
-    构造给大模型的规划提示词。
+    构造给大模型的系统提示词。
     """
-    current_date = _get_current_time()
-
-    agent_catalog_text = _render_agent_catalog()
-
-    return f"""
+    return """
 你是一个多 Agent 财报分析系统中的规划器（Planning Skill）。
 
 你的职责：
@@ -132,20 +128,6 @@ def build_planning_prompt(user_query: str) -> str:
 - 你输出的是“规划建议”，系统代码会进一步校验并进入运行时调度
 - 你的输出必须能被解析为合法 JSON 对象
 - 允许使用 JSON 代码块包裹，但不要输出与 JSON 无关的额外说明文字
-
-====================
-【系统中的可用 Agent 及能力边界】
-====================
-{agent_catalog_text}
-
-====================
-【当前时间上下文】
-====================
-{{
-"current_year": {current_date["year"]},
-"current_month": {current_date["month"]}
-}}
-在处理类似“近三年”“最近一年”等时间表达时，请基于该日期进行推算。
 
 ====================
 【规划规则】
@@ -300,6 +282,30 @@ def build_planning_prompt(user_query: str) -> str:
 3. 不要输出与 JSON 无关的解释性文字
 4. 不要添加上面 schema 之外的字段
 5. 如果某个字段未知，可使用 null
+    """.strip()
+
+def build_planning_prompt(user_query: str) -> str:
+    """
+    构造给大模型的规划提示词。
+    """
+    current_date = _get_current_time()
+
+    agent_catalog_text = _render_agent_catalog()
+
+    return f"""
+====================
+【系统中的可用 Agent 及能力边界】
+====================
+{agent_catalog_text}
+
+====================
+【当前时间上下文】
+====================
+{{
+"current_year": {current_date["year"]},
+"current_month": {current_date["month"]}
+}}
+在处理类似“近三年”“最近一年”等时间表达时，请基于该日期进行推算。
 
 ====================
 【用户输入】
