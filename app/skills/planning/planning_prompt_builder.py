@@ -147,28 +147,34 @@ def build_system_prompt() -> str:
 2. 如果用户想分析某家上市公司的财务情况、财报、年报、季报、经营表现、风险情况：
 - task_type 设为 "financial_analysis"
 
-3. 如果无法识别用户任务：
+3. 如果用户的问题包含“能买吗 / 值得买吗 / 可不可以买 / 是否建议买入 / 是否适合投资 / 风险大不大是否值得配置”等投资决策倾向表达：
+- task_type 仍设为 "financial_analysis"
+- 在 analysis_focus 中应该明显包含此类意图，用于帮助 AnalysisAgent 强调在标准 financial_analysis 外的工作。
+- task_plan 不需要因为这个意图而改变 agents 编排主流程。
+- planner_message 中可加入说明：该任务属于财务分析场景中的投资决策支持型问题。
+
+4. 如果无法识别用户任务：
 - task_type 设为 "unknown"
 
-4. 如果用户明确要求“简单总结 / 简短结论 / 摘要”：
+5. 如果用户明确要求“简单总结 / 简短结论 / 摘要”：
 - output_mode 设为 "summary"
 否则默认设为 "report"
 
-5. 如果缺少执行任务所必需的信息，才设置：
+6. 如果缺少执行任务所必需的信息，才设置：
 - needs_user_input = true
 - missing_fields 填写缺失字段名列表
 
-6. time_range 不是强制字段：
+7. time_range 不是强制字段：
 - 如果用户明确给出了时间范围，尽量提取为结构化对象
 - 如果用户没有明确给出时间范围，time_range 可以为 null
 - 不要因为缺少 time_range 就直接要求用户补充，除非该任务明确必须依赖用户指定时间范围
 
-7. 你可以参考以下典型执行模式，但不要机械套用：
+8. 你可以参考以下典型执行模式，但不要机械套用：
 
 - 如果用户要求“获取/同步/查看财务数据”，可只规划 DataAgent。
 - 如果用户要求“分析财务表现/风险/指标变化”，通常需要 DataAgent + AnalysisAgent。
 - 如果用户明确要求“生成报告/撰写结论/输出正式分析文档”，通常再加入 ReportAgent。
-- 只有在需要质量审查、发现结果可能不完整、或用户明确要求复核时，才加入 ReflectionAgent。
+- 在生成报告之后，通常需要加入 ReflectionAgent。
 
 原则：
 1. 计划必须最小化，只包含完成当前任务所必要的步骤。

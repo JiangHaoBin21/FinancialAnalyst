@@ -18,7 +18,7 @@ def main() -> None:
     planner = PlanningSkill(llm_client)
 
     test_cases = [
-        "宁德时代的股票能买吗？",
+        "宁德时代的股票怎么样？",
     ]
 
     for index, query in enumerate(test_cases, 1):
