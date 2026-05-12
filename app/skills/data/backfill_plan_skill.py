@@ -1,7 +1,8 @@
 from collections import defaultdict
 from typing import Any
 
-from app.skills.data.data_prompt_builder import build_data_user_prompt, build_data_system_prompt
+from app.skills.data.data_prompt_builder import build_data_backfill_user_prompt, build_data_backfill_system_prompt
+from app.skills.planning.planning_parser import parse_json_response
 
 
 class BackfillPlanSkill:
@@ -17,7 +18,7 @@ class BackfillPlanSkill:
         """
         return self.llm_client.generate(user_prompt=user_prompt, system_prompt=system_prompt)
 
-    def backfill_plan(self, analysis_focus,data_completeness_check_result: dict[str, Any]):
+    def backfill_plan(self, analysis_focus, data_completeness_check_result: dict[str, Any]):
         """
         只负责：
         完整性检查结果 -> prompt -> LLM raw response
@@ -28,7 +29,7 @@ class BackfillPlanSkill:
                 need_backfill[part["part_name"]].append(part["missing_periods"])
         if not need_backfill:
             return need_backfill
-        user_prompt = build_data_user_prompt()
-        system_prompt = build_data_system_prompt()
+        user_prompt = build_data_backfill_user_prompt(analysis_focus, need_backfill)
+        system_prompt = build_data_backfill_system_prompt()
         raw_response = self._call_llm(user_prompt=user_prompt, system_prompt=system_prompt)
-        return raw_response
+        return parse_json_response(raw_response)

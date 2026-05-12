@@ -9,7 +9,7 @@ class ReportAgent:
     """Builds a simple report from analysis output."""
 
     def run(self, state: WorkflowState) -> dict:
-        print("[ReportAgent] running...")
+        print("[ReportAgent] 正在执行...")
 
         company = state.get("company_name") or state.get("ts_code") or "TargetCompany"
         company_profile = state.get("company_profile", {})
@@ -36,5 +36,5 @@ This is a mock report used to validate the LangGraph workflow.
                 "analysis_summary": summary,
             },
             "final_report": report,
-            "assistant_message": "ReportAgent generated mock report.",
+            "assistant_message": "ReportAgent 生成模拟报告。",
         }

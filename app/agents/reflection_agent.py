@@ -9,7 +9,7 @@ class ReflectionAgent:
     """Reviews the report and passes by default."""
 
     def run(self, state: WorkflowState) -> dict:
-        print("[ReflectionAgent] running...")
+        print("[ReflectionAgent] 正在执行...")
 
         return {
             "reflection_result": {
@@ -19,5 +19,5 @@ class ReflectionAgent:
             },
             "needs_revision": False,
             "replan_required": False,
-            "assistant_message": "ReflectionAgent review passed.",
+            "assistant_message": "ReflectionAgent 审查通过。",
         }

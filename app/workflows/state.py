@@ -115,8 +115,8 @@ class WorkflowState(TypedDict, total=False):
     data_fetch_errors: Annotated[list[str], append_list]
 
     # 数据合并结果
-    financial_data: dict[str, Any]
-    data_summary: dict[str, Any]
+    financial_data: dict[str, list]
+    data_summary: Optional[str]
 
     # 数据检查完整性
     data_completeness_check_result: dict[str, Any]
@@ -146,6 +146,9 @@ class WorkflowState(TypedDict, total=False):
     is_finished: bool
     has_error: bool
     error_message: Optional[str]
+    # agent间通讯的消息
+    trans_message: Optional[str]
+    # 给人看的消息
     assistant_message: Optional[str]
 
     # 可观测性
@@ -193,7 +196,7 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "data_fetch_errors": [],
         "company_profile": {},
         "financial_data": {},
-        "data_summary": {},
+        "data_summary": None,
         "data_completeness_check_result": {},
         "need_backfill": {},
         "already_backfill": 0,
@@ -212,6 +215,7 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "has_error": False,
         "error_message": None,
         "assistant_message": None,
+        "trans_message": None,
         "execution_history": [],
         "final_response": None,
     }

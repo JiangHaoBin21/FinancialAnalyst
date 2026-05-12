@@ -71,6 +71,7 @@ AGENT_REGISTRY: dict[str, dict[str, Any]] = {
     },
 }
 
+
 def _render_agent_catalog() -> str:
     """
     将 AGENT_REGISTRY 渲染为 prompt 文本。
@@ -102,12 +103,14 @@ def _render_agent_catalog() -> str:
 
     return "\n".join(lines).strip()
 
+
 def _get_current_time():
     now = datetime.now()
     return {
         "year": now.year,
         "month": now.month
     }
+
 
 def build_system_prompt() -> str:
     """
@@ -289,6 +292,7 @@ def build_system_prompt() -> str:
 4. 不要添加上面 schema 之外的字段
 5. 如果某个字段未知，可使用 null
     """.strip()
+
 
 def build_planning_prompt(user_query: str) -> str:
     """

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.workflows.state import (
     CORE_DATA_PARTS,
     DATA_PART_BALANCE,
@@ -20,38 +22,30 @@ class DataAgent:
     The agent decides which deterministic data nodes should run. LangGraph is
     responsible for scheduling those nodes in parallel.
     """
+    def __init__(self, required_parts_skill, backfill_plan_skill):
+        self.required_parts_skill = required_parts_skill
+        self.backfill_plan_skill = backfill_plan_skill
 
     def run(self, state: WorkflowState) -> dict:
-        required_parts = self.plan_required_parts(state)
+        if not state.get("financial_data"):
+            return self._plan_required_parts(state)
+        else:
+            return self._decide_backfill(state)
+
+
+    def _plan_required_parts(self, state: WorkflowState) -> dict[str, Any]:
+        results = self.required_parts_skill.plan_required_parts(
+            state.get("user_query"),
+            state.get("analysis_focus")
+        )
         return {
-            "required_data_parts": required_parts,
-            "status": WorkflowStatus.DATA_PLANNED,
-            "assistant_message": (
-                "DataAgent planned data requirements: " + ", ".join(required_parts)
-            ),
+            "required_data_parts": results.get("required_data_parts"),
+            "assistant_message": results.get("note")
         }
 
-    def plan_required_parts(self, state: WorkflowState) -> list[str]:
-        focus = (state.get("analysis_focus") or "").lower()
-        query = (state.get("user_query") or "").lower()
-        text = f"{focus} {query}"
-
-        parts = {DATA_PART_COMPANY_PROFILE}
-
-        if any(keyword in text for keyword in ["profit", "revenue", "income", "盈利", "利润", "收入"]):
-            parts.update({DATA_PART_INCOME, DATA_PART_INDICATORS})
-
-        if any(keyword in text for keyword in ["debt", "solvency", "liability", "偿债", "负债", "资产"]):
-            parts.update({DATA_PART_BALANCE, DATA_PART_INDICATORS})
-
-        if any(keyword in text for keyword in ["cash", "现金流", "现金"]):
-            parts.update({DATA_PART_CASHFLOW})
-
-        if any(keyword in text for keyword in ["growth", "综合", "财务", "report", "报告", "分析"]):
-            parts.update(CORE_DATA_PARTS)
-
-        # If the planner gave no strong signal, use the full conservative set.
-        if len(parts) == 1:
-            parts.update(CORE_DATA_PARTS)
-
-        return [part for part in CORE_DATA_PARTS if part in parts]
+    def _decide_backfill(self, state: WorkflowState) -> dict[str, Any]:
+        llm_judge_results = self.backfill_plan_skill.backfill_plan(
+            analysis_focus=state.get("analysis_focus"),
+            data_completeness_check_result=state.get("data_completeness_check_result"),
+        ) or {}
+        return llm_judge_results

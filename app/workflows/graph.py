@@ -13,11 +13,11 @@ from app.services.tushare_service import TushareService
 from app.skills.capabilities.company_resolver import CompanyResolver
 from app.skills.capabilities.data_completeness_checker import DataCompletenessChecker
 from app.skills.capabilities.time_range_parser import TimeRangeParser
-from app.skills.data import backfill_plan_skill
 from app.skills.data.backfill_plan_skill import BackfillPlanSkill
 from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.skills.data.completeness_check_skill import CompletenessCheckSkill
 from app.skills.data.data_preparation_skill import DataPreparationSkill
+from app.skills.data.required_parts_skill import RequiredPartsSkill
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.state import (
     DATA_PART_BALANCE,
@@ -155,6 +155,8 @@ class WorkflowGraph:
         builder.add_node("fetch_financial_indicator", self._wrap_node(self.nodes.fetch_financial_indicator_node))
         builder.add_node("data_merge", self._wrap_node(self.nodes.data_merge_node))
         builder.add_node("completeness_check", self._wrap_node(self.nodes.completeness_check_node))
+        builder.add_node("backfill_planner", self._wrap_node(self.nodes.backfill_planner_node))
+        builder.add_node("data_finalize", self._wrap_node(self.nodes.data_finalize_node))
         builder.add_node("analysis", self._wrap_node(self.nodes.analysis_node))
         builder.add_node("report", self._wrap_node(self.nodes.report_node))
         builder.add_node("reflection", self._wrap_node(self.nodes.reflection_node))
@@ -178,7 +180,9 @@ class WorkflowGraph:
 
         # builder.add_conditional_edges("data_merge", self._route_after_node, self._route_path_map(END))
         builder.add_edge("data_merge", "completeness_check")
-        for node_name in ("analysis", "report", "reflection"):
+        builder.add_edge("completeness_check", "backfill_planner")
+        builder.add_conditional_edges("backfill_planner", self._route_data_parts, self._data_route_path_map())
+        for node_name in ("data_finalize", "analysis", "report", "reflection"):
             builder.add_conditional_edges(node_name, self._route_after_node, self._route_path_map(END))
 
         builder.add_edge("await_user_input", END)
@@ -222,6 +226,7 @@ class WorkflowGraph:
             DATA_PART_CASHFLOW: "fetch_cashflow_statement",
             DATA_PART_INDICATORS: "fetch_financial_indicator",
             "data_merge": "data_merge",
+            "data_finalize": "data_finalize",
             "error": "error",
         }
 
@@ -272,11 +277,25 @@ class WorkflowGraph:
         if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
             return ["error"]
 
-        if state.get("need_backfill"):
-            if int(state.get("already_backfill")) <= 2:
+        if not state.get("data_summary"):
+            if state.get("need_backfill"):
+                if int(state.get("already_backfill")) <= 2:
+                    routes = [
+                        part
+                        for part in state.get("need_backfill").keys()
+                        if part in {
+                            DATA_PART_INCOME,
+                            DATA_PART_BALANCE,
+                            DATA_PART_CASHFLOW,
+                            DATA_PART_INDICATORS,
+                        }
+                    ]
+                else:
+                    return ["data_finalize"]
+            else:
                 routes = [
                     part
-                    for part in state.get("need_backfill").keys()
+                    for part in state.get("required_data_parts", [])
                     if part in {
                         DATA_PART_INCOME,
                         DATA_PART_BALANCE,
@@ -284,20 +303,9 @@ class WorkflowGraph:
                         DATA_PART_INDICATORS,
                     }
                 ]
-            else:
-                return ["data_finalize"]
+            return routes
         else:
-            routes = [
-                part
-                for part in state.get("required_data_parts", [])
-                if part in {
-                    DATA_PART_INCOME,
-                    DATA_PART_BALANCE,
-                    DATA_PART_CASHFLOW,
-                    DATA_PART_INDICATORS,
-                }
-            ]
-        return routes or ["data_merge"]
+            return ["data_finalize"]
 
     @staticmethod
     def _infer_entry_step(state: WorkflowState) -> WorkflowStep:
@@ -381,10 +389,11 @@ def build_workflow_graph(
         time_range_parser = TimeRangeParser()
         completeness_checker_capability = DataCompletenessChecker()
         completeness_checker_skill = CompletenessCheckSkill(completeness_checker_capability)
-
+        backfill_plan_skill = BackfillPlanSkill(llm_client)
+        required_parts_skill = RequiredPartsSkill(llm_client)
         nodes = WorkflowNodes(
             supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
-            data_agent=DataAgent(),
+            data_agent=DataAgent(required_parts_skill=required_parts_skill, backfill_plan_skill=backfill_plan_skill),
             analysis_agent=AnalysisAgent(),
             report_agent=ReportAgent(),
             reflection_agent=ReflectionAgent(),
@@ -399,7 +408,6 @@ def build_workflow_graph(
                 session_factory=session_factory
             ),
             completeness_checker_skill=completeness_checker_skill,
-            backfill_plan_skill=BackfillPlanSkill(llm_client),
         )
 
     return WorkflowGraph(

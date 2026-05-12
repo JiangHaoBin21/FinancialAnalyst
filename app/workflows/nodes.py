@@ -172,10 +172,28 @@ class WorkflowNodes:
                 agent_name="DataAgent",
                 message=f"DataAgent failed: {type(e).__name__}: {e}",
             )
+        resolved_company_name = company_profile.get("name") or company_profile.get("company_name")
+        if not resolved_company_name:
+            return self._node_error(
+                state=state,
+                node_step=WorkflowStep.DATA,
+                agent_name="DataAgent",
+                message="DataAgent failed: company profile missing company name.",
+            )
+        company_profile = {**company_profile, "name": resolved_company_name}
         return {
             "ts_code": company_profile["ts_code"],
-            "company_name": company_profile["name"],
-            "company_profile": company_profile
+            "company_name": resolved_company_name,
+            "company_profile": company_profile,
+            "execution_history": [
+                execution_record(
+                    step=WorkflowStep.DATA.value,
+                    agent="DataNode:company context",
+                    success=True,
+                    message="公司上下文解析完成",
+                    metadata={"ts_code": company_profile["ts_code"]},
+                )
+            ],
         }
 
     def analysis_node(self, state: WorkflowState) -> dict:
@@ -225,7 +243,7 @@ class WorkflowNodes:
             time_range=state.get("time_range"),
             required_parts=[DATA_PART_INCOME],
             company_profile=state.get("company_profile"),
-            backfill=state.get("need_backfill"),
+            backfill=self._part_backfill(state, DATA_PART_INCOME),
         )
         return self._data_part_update(DATA_PART_INCOME, payload)
 
@@ -239,7 +257,7 @@ class WorkflowNodes:
             time_range=state.get("time_range"),
             required_parts=[DATA_PART_BALANCE],
             company_profile=state.get("company_profile"),
-            backfill=state.get("need_backfill"),
+            backfill=self._part_backfill(state, DATA_PART_BALANCE),
         )
         return self._data_part_update(DATA_PART_BALANCE, payload)
 
@@ -253,7 +271,7 @@ class WorkflowNodes:
             time_range=state.get("time_range"),
             required_parts=[DATA_PART_CASHFLOW],
             company_profile=state.get("company_profile"),
-            backfill=state.get("need_backfill"),
+            backfill=self._part_backfill(state, DATA_PART_CASHFLOW),
         )
         return self._data_part_update(DATA_PART_CASHFLOW, payload)
 
@@ -267,14 +285,13 @@ class WorkflowNodes:
             time_range=state.get("time_range"),
             required_parts=[DATA_PART_INDICATORS],
             company_profile=state.get("company_profile"),
-            backfill=state.get("need_backfill"),
+            backfill=self._part_backfill(state, DATA_PART_INDICATORS),
         )
         return self._data_part_update(DATA_PART_INDICATORS, payload)
 
     def data_merge_node(self, state: WorkflowState) -> dict:
         """校验并合并所有并行数据抓取节点的结果。"""
         print("[DataNode] 并行节点数据结果合并...")
-        required_parts = state.get("required_data_parts", [])
         results = state.get("data_part_results", [])
 
         financial_data = defaultdict(list)
@@ -321,13 +338,18 @@ class WorkflowNodes:
     def completeness_check_node(self, state: WorkflowState) -> dict:
         """执行完整性检查阶段的计划步骤。"""
         print("[DataNode] 检查合并后数据是否完整...")
-        completeness_check_result = self.company_profile_fetch_skill.skill_check(
+        financial_required_parts = [
+            part
+            for part in state.get("required_data_parts", [])
+            if part != DATA_PART_COMPANY_PROFILE
+        ]
+        completeness_check_result = self.completeness_checker_skill.skill_check(
             requested_time_range=state.get("time_range"),
             financial_data=state.get("financial_data"),
-            required_parts=state.get("required_data_parts")
+            required_parts=financial_required_parts
         )
         return {
-            "completeness_check_result": completeness_check_result,
+            "data_completeness_check_result": completeness_check_result,
             "execution_history": [
                 execution_record(
                     step=WorkflowStep.DATA.value,
@@ -340,12 +362,76 @@ class WorkflowNodes:
 
     def backfill_planner_node(self, state: WorkflowState) -> dict:
         """执行回源计划步骤。"""
+        if self.data_agent is None:
+            return self._node_error(
+                state=state,
+                node_step=WorkflowStep.DATA,
+                agent_name="DataAgent",
+                message="DataAgent is not configured.",
+            )
         if state.get("data_completeness_check_result")["has_missing_data"]:
             print("[DataNode] 数据有缺失，判定是否需要回源...")
-            already_backfill = state.get("already_backfill") + 1
-            if self.backfill_plan_skill.backfill_plan():
-                print(f"[DataNode] 需要回源,当前已回源次数：{already_backfill}次...")
+            update = self.data_agent.run(state)
+            if update.get("should_backfill"):
+                print(f"[DataNode] 需要回源,当前已回源次数：{state.get('already_backfill')}次...")
+                already_backfill = state.get("already_backfill") + 1
+                return {
+                    "already_backfill": already_backfill,
+                    "need_backfill": update.get("backfill_targets"),
+                    "execution_history": [
+                        execution_record(
+                            step=WorkflowStep.DATA.value,
+                            agent="DataNode:backfill plan",
+                            success=True,
+                            message="回源计划"
+                        )
+                    ]
+                }
+            else:
+                return {
+                    "need_backfill": {},
+                    "trans_message": update.get("notes_for_analysis", ""),
+                    "data_summary": "数据仍不完整，但由LLM判定无需回源补充或回源补充已超最大次数。",
+                    "execution_history": [
+                        execution_record(
+                            step=WorkflowStep.DATA.value,
+                            agent="DataNode:backfill plan",
+                            success=True,
+                            message="回源计划"
+                        )
+                    ]
+                }
+        else:
+            print("[DataNode] 数据完整，无需回源...")
+            return {
+                "trans_message": "数据完整",
+                "data_summary": "数据完整。",
+                "execution_history": [
+                    execution_record(
+                        step=WorkflowStep.DATA.value,
+                        agent="DataNode:backfill plan",
+                        success=True,
+                        message="回源计划"
+                    )
+                ]
+            }
 
+    def data_finalize_node(self, state: WorkflowState) -> dict:
+        """执行数据finalize计划步骤。"""
+        print("[DataNode] 执行数据finalize计划步骤...")
+        plan_update = complete_current_plan_step(state)
+        return {
+            **plan_update,
+            
+            "execution_history": [
+                execution_record(
+                    step=WorkflowStep.DATA.value,
+                    agent="DataNode:finalize",
+                    success=True,
+                    message="数据处理完成"
+                )
+            ]
+        }
 
 
 
@@ -543,6 +629,14 @@ class WorkflowNodes:
                 )
             ],
         }
+
+    @staticmethod
+    def _part_backfill(state: WorkflowState, part_name: str) -> dict[str, list[str]] | None:
+        """只把当前数据分片需要回源的 period 传给对应 fetch node。"""
+        need_backfill = state.get("need_backfill") or {}
+        if part_name not in need_backfill:
+            return None
+        return {part_name: need_backfill[part_name]}
 
     def _node_error(
         self,
