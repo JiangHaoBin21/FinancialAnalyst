@@ -34,14 +34,14 @@ from app.skills.data.backfill_plan_skill import BackfillPlanSkill
 from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.skills.data.completeness_check_skill import CompletenessCheckSkill
 from app.skills.data.data_preparation_skill import DataPreparationSkill
+from app.skills.data.required_parts_skill import RequiredPartsSkill
 from app.skills.planning.planning_skill import PlanningSkill
 from app.workflows.graph import WorkflowGraph
 from app.workflows.nodes import WorkflowNodes
+from app.workflows.subgraphs.data_nodes import DataSubgraphNodes
 from app.workflows.state import (
-    CORE_DATA_PARTS,
     DATA_PART_BALANCE,
     DATA_PART_CASHFLOW,
-    DATA_PART_COMPANY_PROFILE,
     DATA_PART_INCOME,
     DATA_PART_INDICATORS,
     WorkflowState,
@@ -84,9 +84,17 @@ EXPECTED_NODES = {
 
 EXPECTED_GRAPH_NODES = EXPECTED_NODES - {"await_user_input_node"}
 
-NODE_METHOD_NAMES = [
+MAIN_NODE_METHOD_NAMES = [
     "supervisor_node",
     "await_user_input_node",
+    "analysis_node",
+    "report_node",
+    "reflection_node",
+    "finish_node",
+    "error_node",
+]
+
+DATA_NODE_METHOD_NAMES = [
     "data_planner_node",
     "prepare_company_context_node",
     "fetch_income_statement_node",
@@ -97,11 +105,7 @@ NODE_METHOD_NAMES = [
     "completeness_check_node",
     "backfill_planner_node",
     "data_finalize_node",
-    "analysis_node",
-    "report_node",
-    "reflection_node",
-    "finish_node",
-    "error_node",
+    "data_error_node",
 ]
 
 EXECUTION_AGENT_TO_NODE = {
@@ -167,11 +171,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_real_nodes() -> WorkflowNodes:
+def build_real_nodes() -> tuple[WorkflowNodes, DataSubgraphNodes]:
     settings.validate()
 
     llm_client = OpenAIClient()
     planning_skill = PlanningSkill(llm_client=llm_client)
+    required_parts_skill = RequiredPartsSkill(llm_client=llm_client)
+    backfill_plan_skill = BackfillPlanSkill(llm_client=llm_client)
     tushare_service = TushareService(TushareServiceConfig(token=settings.TuShare_Token))
 
     company_repo = CompanyRepository()
@@ -185,12 +191,18 @@ def build_real_nodes() -> WorkflowNodes:
         tushare_service=tushare_service,
     )
 
-    return WorkflowNodes(
+    nodes = WorkflowNodes(
         supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
-        data_agent=DataAgent(),
         analysis_agent=AnalysisAgent(),
         report_agent=ReportAgent(),
         reflection_agent=ReflectionAgent(),
+    )
+
+    data_nodes = DataSubgraphNodes(
+        data_agent=DataAgent(
+            required_parts_skill=required_parts_skill,
+            backfill_plan_skill=backfill_plan_skill,
+        ),
         company_profile_fetch_skill=CompanyProfileFetchSkill(
             company_resolver=company_resolver,
             session_factory=SessionLocal,
@@ -205,8 +217,9 @@ def build_real_nodes() -> WorkflowNodes:
             session_factory=SessionLocal,
         ),
         completeness_checker_skill=CompletenessCheckSkill(DataCompletenessChecker()),
-        backfill_plan_skill=BackfillPlanSkill(llm_client),
     )
+
+    return nodes, data_nodes
 
 
 def require(condition: bool, message: str) -> None:
@@ -224,7 +237,10 @@ def enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
 
 
-def attach_node_result_recorder(nodes: WorkflowNodes) -> list[dict[str, Any]]:
+def attach_node_result_recorder(
+    nodes: WorkflowNodes,
+    data_nodes: DataSubgraphNodes,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     lock = Lock()
 
@@ -256,9 +272,13 @@ def attach_node_result_recorder(nodes: WorkflowNodes) -> list[dict[str, Any]]:
 
         return wrapped
 
-    for node_name in NODE_METHOD_NAMES:
-        original_node = getattr(nodes, node_name)
-        setattr(nodes, node_name, wrap_node(node_name, original_node))
+    for target, node_names in (
+        (nodes, MAIN_NODE_METHOD_NAMES),
+        (data_nodes, DATA_NODE_METHOD_NAMES),
+    ):
+        for node_name in node_names:
+            original_node = getattr(target, node_name)
+            setattr(target, node_name, wrap_node(node_name, original_node))
 
     return records
 
@@ -392,10 +412,11 @@ def print_execution_history(state: WorkflowState) -> None:
 
 def assert_graph_node_outputs(state: WorkflowState) -> None:
     require(not state.get("has_error"), f"图执行失败: {state.get('error_message')}")
+    required_parts = set(state.get("required_data_parts", []))
     require(
-        state.get("required_data_parts") == CORE_DATA_PARTS,
+        set(FINANCIAL_PARTS).issubset(required_parts),
         (
-            "图执行后 DataAgent 未选择全部数据分片。"
+            "图执行后 DataAgent 未选择全部财务数据分片。"
             f"实际数据分片={state.get('required_data_parts')}"
         ),
     )
@@ -420,6 +441,7 @@ def assert_graph_node_outputs(state: WorkflowState) -> None:
 
 def run_graph_scheduling_check(
     nodes: WorkflowNodes,
+    data_nodes: DataSubgraphNodes,
     query: str,
     node_result_records: list[dict[str, Any]],
     *,
@@ -428,6 +450,7 @@ def run_graph_scheduling_check(
     print_step("图调度检查 - 使用真实 WorkflowGraph 调度到各节点")
     graph = WorkflowGraph(
         nodes=nodes,
+        data_nodes=data_nodes,
         max_iterations=30,
         enable_trace=False,
     )
@@ -498,11 +521,12 @@ def main() -> None:
     print("  - 公司查询或回源需要时通过 TushareService 访问 TuShare")
     print(f"用户输入: {args.query}")
 
-    nodes = build_real_nodes()
-    node_result_records = attach_node_result_recorder(nodes)
+    nodes, data_nodes = build_real_nodes()
+    node_result_records = attach_node_result_recorder(nodes, data_nodes)
 
     state, graph_covered = run_graph_scheduling_check(
         nodes,
+        data_nodes,
         args.query,
         node_result_records,
         full_results=args.full_results,
@@ -518,8 +542,8 @@ def main() -> None:
     missing_nodes = EXPECTED_NODES - covered
     require(not missing_nodes, f"节点覆盖缺失: {sorted(missing_nodes)}")
     require(
-        DATA_PART_COMPANY_PROFILE in state.get("required_data_parts", []),
-        "未规划公司画像数据分片",
+        "prepare_company_context_node" in covered,
+        "图未调度公司画像节点",
     )
 
     print_step("完成")

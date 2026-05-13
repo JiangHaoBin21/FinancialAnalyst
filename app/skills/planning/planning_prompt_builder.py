@@ -316,6 +316,7 @@ def build_planning_prompt(user_query: str) -> str:
 "current_month": {current_date["month"]}
 }}
 在处理类似“近三年”“最近一年”等时间表达时，请基于该日期进行推算。
+注意：end_year 和 end_month 不能超过当前时间。
 
 ====================
 【用户输入】

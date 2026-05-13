@@ -20,10 +20,6 @@ from app.skills.data.data_preparation_skill import DataPreparationSkill
 from app.skills.data.required_parts_skill import RequiredPartsSkill
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.state import (
-    DATA_PART_BALANCE,
-    DATA_PART_CASHFLOW,
-    DATA_PART_INCOME,
-    DATA_PART_INDICATORS,
     WorkflowState,
     WorkflowStatus,
     WorkflowStep,
@@ -32,6 +28,8 @@ from app.workflows.state import (
     normalize_for_json,
     next_workflow_step,
 )
+from app.workflows.subgraphs.data_graph import build_data_subgraph
+from app.workflows.subgraphs.data_nodes import DataSubgraphNodes
 
 
 class WorkflowGraph:
@@ -40,17 +38,21 @@ class WorkflowGraph:
     def __init__(
         self,
         nodes: WorkflowNodes,
+        data_nodes: DataSubgraphNodes,
         max_iterations: int = 20,
         enable_trace: bool = False,
+        checkpointer: Any | None = None,
     ):
         self.nodes = nodes
+        self.data_nodes = data_nodes
         self.max_iterations = max_iterations
         self.enable_trace = enable_trace
+        self.checkpointer = checkpointer
         # 单步执行时使用的步骤到节点函数映射。
         self._route_table: dict[WorkflowStep, Callable[[WorkflowState], dict]] = {
             WorkflowStep.SUPERVISOR: self.nodes.supervisor_node,
             WorkflowStep.AWAIT_USER_INPUT: self.nodes.await_user_input_node,
-            WorkflowStep.DATA: self.nodes.data_planner_node,
+            WorkflowStep.DATA: self._run_data_stage_once,
             WorkflowStep.ANALYSIS: self.nodes.analysis_node,
             WorkflowStep.REPORT: self.nodes.report_node,
             WorkflowStep.REFLECTION: self.nodes.reflection_node,
@@ -60,11 +62,11 @@ class WorkflowGraph:
         # 编译后的 LangGraph 供完整运行路径复用。
         self._compiled_graph = self._build_langgraph()
 
-    def run(self, user_query: str) -> WorkflowState:
+    def run(self, user_query: str, thread_id: str | None = None) -> WorkflowState:
         """从用户查询启动新的工作流。"""
-        return self.continue_from_state(create_initial_state(user_query=user_query))
+        return self.continue_from_state(create_initial_state(user_query=user_query), thread_id=thread_id)
 
-    def continue_from_state(self, state: WorkflowState) -> WorkflowState:
+    def continue_from_state(self, state: WorkflowState, thread_id: str | None = None) -> WorkflowState:
         """从已有的 LangGraph 原生状态字典继续执行。"""
         if not isinstance(state, dict):
             raise TypeError("continue_from_state requires a WorkflowState dict.")
@@ -72,11 +74,18 @@ class WorkflowGraph:
         # 兼容恢复旧状态或外部传入状态时缺少 next_step 的情况。
         if state.get("next_step") is None:
             state = {**state, "next_step": self._infer_entry_step(state)}
+        config = {
+            "recursion_limit": self._recursion_limit,
+        }
 
+        if thread_id:
+            config["configurable"] = {
+                "thread_id": thread_id,
+            }
         try:
             return self._compiled_graph.invoke(
                 state,
-                config={"recursion_limit": self._recursion_limit},
+                config=config,
             )
         except Exception as exc:
             failed_state = {
@@ -134,29 +143,56 @@ class WorkflowGraph:
 
         return self._merge_state_update(state, node_fn(state))
 
+    def _run_data_stage_once(self, state: WorkflowState) -> dict:
+        data_subgraph = build_data_subgraph(
+            nodes=self.data_nodes,
+            wrap_node=self._wrap_node,
+        )
+
+        result_state = data_subgraph.invoke(
+            state,
+            config={"recursion_limit": self._recursion_limit},
+        )
+
+        update = {}
+
+        append_keys = {"execution_history", "data_part_results", "data_fetch_errors"}
+
+        for key, value in result_state.items():
+            old_value = state.get(key)
+
+            if key in append_keys:
+                old_list = list(old_value or [])
+                new_list = list(value or [])
+                update[key] = new_list[len(old_list):]
+            elif old_value != value:
+                update[key] = value
+
+        return update
+
     @property
     def _recursion_limit(self) -> int:
         return max(self.max_iterations + 8, 16)
 
     def _build_langgraph(self):
-        """构建并编译 LangGraph 节点拓扑。"""
+        """构建并编译主工作流图。
+
+        主图只负责编排大阶段：
+        supervisor -> data_stage -> analysis -> report -> reflection -> finished/error
+        Data 阶段内部细节由 DataSubgraph 管理。
+        """
         StateGraph, START, END = self._import_langgraph()
 
         builder = StateGraph(WorkflowState)
 
-        # 注册各阶段节点，节点只返回局部状态更新。
+        data_subgraph = build_data_subgraph(
+            nodes=self.data_nodes,
+            wrap_node=self._wrap_node,
+        )
+
         builder.add_node("supervisor", self._wrap_node(self.nodes.supervisor_node))
         builder.add_node("await_user_input", self._wrap_node(self.nodes.await_user_input_node))
-        builder.add_node("data_planner", self._wrap_node(self.nodes.data_planner_node))
-        builder.add_node("prepare_company_context", self._wrap_node(self.nodes.prepare_company_context_node))
-        builder.add_node("fetch_income_statement", self._wrap_node(self.nodes.fetch_income_statement_node))
-        builder.add_node("fetch_balance_sheet", self._wrap_node(self.nodes.fetch_balance_sheet_node))
-        builder.add_node("fetch_cashflow_statement", self._wrap_node(self.nodes.fetch_cashflow_statement_node))
-        builder.add_node("fetch_financial_indicator", self._wrap_node(self.nodes.fetch_financial_indicator_node))
-        builder.add_node("data_merge", self._wrap_node(self.nodes.data_merge_node))
-        builder.add_node("completeness_check", self._wrap_node(self.nodes.completeness_check_node))
-        builder.add_node("backfill_planner", self._wrap_node(self.nodes.backfill_planner_node))
-        builder.add_node("data_finalize", self._wrap_node(self.nodes.data_finalize_node))
+        builder.add_node("data_stage", data_subgraph)
         builder.add_node("analysis", self._wrap_node(self.nodes.analysis_node))
         builder.add_node("report", self._wrap_node(self.nodes.report_node))
         builder.add_node("reflection", self._wrap_node(self.nodes.reflection_node))
@@ -164,32 +200,42 @@ class WorkflowGraph:
         builder.add_node("error", self._wrap_node(self.nodes.error_node))
 
         builder.add_edge(START, "supervisor")
-        # 根据状态中的 next_step、status 和错误标记决定下一跳。
-        builder.add_conditional_edges("supervisor", self._route_after_node, self._route_path_map(END))
-        builder.add_edge("data_planner", "prepare_company_context")
-        builder.add_conditional_edges("prepare_company_context", self._route_data_parts, self._data_route_path_map())
 
-        # 多个数据抓取节点可以并行执行，最后统一汇聚到 data_merge。
-        for fetch_node in (
-            "fetch_income_statement",
-            "fetch_balance_sheet",
-            "fetch_cashflow_statement",
-            "fetch_financial_indicator",
-        ):
-            builder.add_edge(fetch_node, "data_merge")
+        builder.add_conditional_edges(
+            "supervisor",
+            self._route_after_node,
+            self._route_path_map(END),
+        )
 
-        # builder.add_conditional_edges("data_merge", self._route_after_node, self._route_path_map(END))
-        builder.add_edge("data_merge", "completeness_check")
-        builder.add_edge("completeness_check", "backfill_planner")
-        builder.add_conditional_edges("backfill_planner", self._route_data_parts, self._data_route_path_map())
-        for node_name in ("data_finalize", "analysis", "report", "reflection"):
-            builder.add_conditional_edges(node_name, self._route_after_node, self._route_path_map(END))
+        builder.add_conditional_edges(
+            "data_stage",
+            self._route_after_node,
+            self._route_path_map(END),
+        )
+
+        builder.add_conditional_edges(
+            "analysis",
+            self._route_after_node,
+            self._route_path_map(END),
+        )
+
+        builder.add_conditional_edges(
+            "report",
+            self._route_after_node,
+            self._route_path_map(END),
+        )
+
+        builder.add_conditional_edges(
+            "reflection",
+            self._route_after_node,
+            self._route_path_map(END),
+        )
 
         builder.add_edge("await_user_input", END)
         builder.add_edge("finished", END)
         builder.add_edge("error", END)
 
-        return builder.compile()
+        return builder.compile(checkpointer=self.checkpointer)
 
     @staticmethod
     def _import_langgraph():
@@ -208,26 +254,13 @@ class WorkflowGraph:
         """定义普通工作流阶段的路由名到节点名映射。"""
         return {
             "await_user_input": "await_user_input",
-            "data": "data_planner",
+            "data": "data_stage",
             "analysis": "analysis",
             "report": "report",
             "reflection": "reflection",
             "finished": "finished",
             "error": "error",
             "end": end_marker,
-        }
-
-    @staticmethod
-    def _data_route_path_map() -> dict[str, str]:
-        """定义数据分片路由名到抓取节点名的映射。"""
-        return {
-            DATA_PART_INCOME: "fetch_income_statement",
-            DATA_PART_BALANCE: "fetch_balance_sheet",
-            DATA_PART_CASHFLOW: "fetch_cashflow_statement",
-            DATA_PART_INDICATORS: "fetch_financial_indicator",
-            "data_merge": "data_merge",
-            "data_finalize": "data_finalize",
-            "error": "error",
         }
 
     def _wrap_node(self, node_fn: Callable[[WorkflowState], dict]) -> Callable[[WorkflowState], dict]:
@@ -271,41 +304,6 @@ class WorkflowGraph:
 
         return "error"
 
-    @staticmethod
-    def _route_data_parts(state: WorkflowState) -> list[str]:
-        """把数据规划结果转换成需要并行触发的数据抓取路由。"""
-        if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
-            return ["error"]
-
-        if not state.get("data_summary"):
-            if state.get("need_backfill"):
-                if int(state.get("already_backfill")) <= 2:
-                    routes = [
-                        part
-                        for part in state.get("need_backfill").keys()
-                        if part in {
-                            DATA_PART_INCOME,
-                            DATA_PART_BALANCE,
-                            DATA_PART_CASHFLOW,
-                            DATA_PART_INDICATORS,
-                        }
-                    ]
-                else:
-                    return ["data_finalize"]
-            else:
-                routes = [
-                    part
-                    for part in state.get("required_data_parts", [])
-                    if part in {
-                        DATA_PART_INCOME,
-                        DATA_PART_BALANCE,
-                        DATA_PART_CASHFLOW,
-                        DATA_PART_INDICATORS,
-                    }
-                ]
-            return routes
-        else:
-            return ["data_finalize"]
 
     @staticmethod
     def _infer_entry_step(state: WorkflowState) -> WorkflowStep:
@@ -351,69 +349,119 @@ class WorkflowGraph:
         """将 WorkflowState 转换为便于 JSON 序列化的字典。"""
         return normalize_for_json(dict(state))
 
+    def get_checkpoint_state(self, thread_id: str):
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+        return self._compiled_graph.get_state(config)
+
+    def get_checkpoint_history(self, thread_id: str):
+        config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+        return list(self._compiled_graph.get_state_history(config))
+
 
 def build_workflow_graph(
     *,
     llm_client: Optional[Any] = None,
     nodes: Optional[WorkflowNodes] = None,
+    data_nodes: Optional[DataSubgraphNodes] = None,
     max_iterations: int = 20,
     enable_trace: bool = False,
+    checkpointer: Any | None = None,
 ) -> WorkflowGraph:
     """构建默认的 LangGraph 原生工作流图。"""
-    if nodes is None:
-        # 延迟创建默认 Agent，方便测试或外部调用时注入自定义节点。
+
+    # 延迟创建默认 Agent / Skill，方便测试或外部调用时注入自定义节点。
+    if nodes is None or data_nodes is None:
         from app.agents.analysis_agent import AnalysisAgent
         from app.agents.data_agent import DataAgent
         from app.agents.reflection_agent import ReflectionAgent
         from app.agents.report_agent import ReportAgent
         from app.agents.supervisor_agent import SupervisorAgent
+        from app.core.config import settings
         from app.llms.openai_client import OpenAIClient
-        from app.skills.planning.planning_skill import PlanningSkill
         from app.repositories.company_repo import CompanyRepository
         from app.services.tushare_service import TushareServiceConfig
-        from app.core.config import settings
+        from app.skills.planning.planning_skill import PlanningSkill
 
         llm_client = llm_client or OpenAIClient()
-        planning_skill = PlanningSkill(llm_client=llm_client)
 
-        company_repo = CompanyRepository()
-        income_repo = IncomeRepository()
-        indicator_repo = FinaIndicatorRepository()
-        cashflow_repo = CashFlowRepository()
-        balance_repo = BalanceSheetRepository()
+        # =========================
+        # 1. 构造主图依赖
+        # =========================
+        if nodes is None:
+            planning_skill = PlanningSkill(llm_client=llm_client)
 
-        config = TushareServiceConfig(settings.TuShare_Token)
-        tushare_client = TushareService(config)
-        company_resolver = CompanyResolver(company_repo, tushare_client)
-        session_factory = SessionLocal
-        time_range_parser = TimeRangeParser()
-        completeness_checker_capability = DataCompletenessChecker()
-        completeness_checker_skill = CompletenessCheckSkill(completeness_checker_capability)
-        backfill_plan_skill = BackfillPlanSkill(llm_client)
-        required_parts_skill = RequiredPartsSkill(llm_client)
-        nodes = WorkflowNodes(
-            supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
-            data_agent=DataAgent(required_parts_skill=required_parts_skill, backfill_plan_skill=backfill_plan_skill),
-            analysis_agent=AnalysisAgent(),
-            report_agent=ReportAgent(),
-            reflection_agent=ReflectionAgent(),
-            company_profile_fetch_skill=CompanyProfileFetchSkill(company_resolver, session_factory),
-            data_preparation_skill=DataPreparationSkill(
+            nodes = WorkflowNodes(
+                supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
+                analysis_agent=AnalysisAgent(),
+                report_agent=ReportAgent(),
+                reflection_agent=ReflectionAgent(),
+            )
+
+        # =========================
+        # 2. 构造 DataSubgraph 依赖
+        # =========================
+        if data_nodes is None:
+            company_repo = CompanyRepository()
+            income_repo = IncomeRepository()
+            indicator_repo = FinaIndicatorRepository()
+            cashflow_repo = CashFlowRepository()
+            balance_repo = BalanceSheetRepository()
+
+            config = TushareServiceConfig(settings.TuShare_Token)
+            tushare_client = TushareService(config)
+
+            company_resolver = CompanyResolver(company_repo, tushare_client)
+            session_factory = SessionLocal
+
+            time_range_parser = TimeRangeParser()
+
+            completeness_checker_capability = DataCompletenessChecker()
+            completeness_checker_skill = CompletenessCheckSkill(
+                completeness_checker_capability
+            )
+
+            backfill_plan_skill = BackfillPlanSkill(llm_client)
+            required_parts_skill = RequiredPartsSkill(llm_client)
+
+            data_agent = DataAgent(
+                required_parts_skill=required_parts_skill,
+                backfill_plan_skill=backfill_plan_skill,
+            )
+
+            data_preparation_skill = DataPreparationSkill(
                 time_range_parser=time_range_parser,
                 income_repo=income_repo,
                 indicator_repo=indicator_repo,
                 cashflow_repo=cashflow_repo,
                 balance_repo=balance_repo,
                 tushare_service=tushare_client,
-                session_factory=session_factory
-            ),
-            completeness_checker_skill=completeness_checker_skill,
-        )
+                session_factory=session_factory,
+            )
+
+            data_nodes = DataSubgraphNodes(
+                data_agent=data_agent,
+                company_profile_fetch_skill=CompanyProfileFetchSkill(
+                    company_resolver,
+                    session_factory,
+                ),
+                data_preparation_skill=data_preparation_skill,
+                completeness_checker_skill=completeness_checker_skill,
+            )
 
     return WorkflowGraph(
         nodes=nodes,
+        data_nodes=data_nodes,
         max_iterations=max_iterations,
         enable_trace=enable_trace,
+        checkpointer=checkpointer,
     )
 
 

@@ -76,13 +76,13 @@ def build_data_plan_user_prompt(user_query: str, analysis_focus: str) -> str:
 
 请严格按照以下 JSON 格式输出：
 
-{
+{{
   "required_data_parts": [
     "income_statements"
   ],
   "confidence": "high",
   "note": "分析说明"
-}
+}}
     """
 
 
