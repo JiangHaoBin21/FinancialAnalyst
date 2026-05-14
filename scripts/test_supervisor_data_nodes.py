@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import fields, is_dataclass
+from enum import Enum
+from math import isfinite
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -59,6 +62,7 @@ DEFAULT_QUERY = (
 MAX_PREVIEW_ITEMS = 3
 MAX_FULL_LIST_ITEMS = 10
 MAX_TEXT_LENGTH = 500
+MAX_JSON_SAFETY_ISSUES = 80
 
 FINANCIAL_PARTS = [
     DATA_PART_INCOME,
@@ -410,6 +414,189 @@ def print_execution_history(state: WorkflowState) -> None:
         )
 
 
+def scan_non_json_safe_values(
+    value: Any,
+    *,
+    path: str = "$",
+    max_issues: int = MAX_JSON_SAFETY_ISSUES,
+) -> tuple[list[dict[str, str]], int]:
+    """扫描 raw state 中不属于 JSON-native 类型的对象。"""
+    issues: list[dict[str, str]] = []
+    total_issue_count = 0
+    active_object_ids: set[int] = set()
+
+    def add_issue(issue_path: str, issue_value: Any, reason: str) -> None:
+        nonlocal total_issue_count
+        total_issue_count += 1
+        if len(issues) >= max_issues:
+            return
+
+        issues.append(
+            {
+                "path": issue_path,
+                "type": _qualified_type_name(issue_value),
+                "reason": reason,
+                "preview": _preview_value(issue_value),
+            }
+        )
+
+    def scan(current_value: Any, current_path: str) -> None:
+        if isinstance(current_value, Enum):
+            add_issue(
+                current_path,
+                current_value,
+                "Enum 实例不是 JSON-native 值，请写入 .value。",
+            )
+            return
+
+        if current_value is None or isinstance(current_value, (str, bool, int)):
+            return
+
+        if isinstance(current_value, float):
+            if not isfinite(current_value):
+                add_issue(current_path, current_value, "非有限 float 不是标准 JSON 数值。")
+            return
+
+        if is_dataclass(current_value) and not isinstance(current_value, type):
+            add_issue(
+                current_path,
+                current_value,
+                "dataclass 实例不是 JSON-native 对象，请先转换为 dict。",
+            )
+            if not _enter_container(current_value, current_path):
+                return
+            try:
+                for field in fields(current_value):
+                    scan(
+                        getattr(current_value, field.name),
+                        _join_json_path(current_path, field.name),
+                    )
+            finally:
+                active_object_ids.remove(id(current_value))
+            return
+
+        if isinstance(current_value, dict):
+            if type(current_value) is not dict:
+                add_issue(
+                    current_path,
+                    current_value,
+                    "dict 子类不是严格 JSON-native 对象，请转换为普通 dict。",
+                )
+            if not _enter_container(current_value, current_path):
+                return
+            try:
+                for key, item in current_value.items():
+                    if not isinstance(key, str):
+                        add_issue(
+                            f"{current_path}<key:{_preview_value(key)}>",
+                            key,
+                            "JSON object key 应为 str。",
+                        )
+                    scan(item, _join_json_path(current_path, key))
+            finally:
+                active_object_ids.remove(id(current_value))
+            return
+
+        if isinstance(current_value, list):
+            if type(current_value) is not list:
+                add_issue(
+                    current_path,
+                    current_value,
+                    "list 子类不是严格 JSON-native 数组，请转换为普通 list。",
+                )
+            if not _enter_container(current_value, current_path):
+                return
+            try:
+                for index, item in enumerate(current_value):
+                    scan(item, f"{current_path}[{index}]")
+            finally:
+                active_object_ids.remove(id(current_value))
+            return
+
+        if isinstance(current_value, tuple):
+            add_issue(
+                current_path,
+                current_value,
+                "tuple 不是 JSON-native 数组，请转换为 list。",
+            )
+            if not _enter_container(current_value, current_path):
+                return
+            try:
+                for index, item in enumerate(current_value):
+                    scan(item, f"{current_path}[{index}]")
+            finally:
+                active_object_ids.remove(id(current_value))
+            return
+
+        add_issue(current_path, current_value, "该对象类型不能直接安全写入 JSON。")
+
+    def _enter_container(container_value: Any, container_path: str) -> bool:
+        object_id = id(container_value)
+        if object_id in active_object_ids:
+            add_issue(container_path, container_value, "存在循环引用，无法 JSON 序列化。")
+            return False
+        active_object_ids.add(object_id)
+        return True
+
+    scan(value, path)
+    return issues, total_issue_count
+
+
+def assert_state_json_safe(state: WorkflowState) -> None:
+    print_step("State JSON-safe 检查")
+    issues, total_issue_count = scan_non_json_safe_values(state)
+
+    if not issues:
+        json.dumps(state, ensure_ascii=False, allow_nan=False)
+        print("final_state 未发现非 JSON-safe 对象。")
+        return
+
+    print(
+        f"final_state 发现 {total_issue_count} 个非 JSON-safe 对象，"
+        f"以下展示前 {len(issues)} 个:"
+    )
+    for index, issue in enumerate(issues, 1):
+        print(
+            f"  {index}. path={issue['path']} | type={issue['type']} | "
+            f"reason={issue['reason']} | preview={issue['preview']}"
+        )
+
+    _print_normalized_json_probe(state)
+    raise AssertionError(f"final_state 包含 {total_issue_count} 个非 JSON-safe 对象")
+
+
+def _print_normalized_json_probe(state: WorkflowState) -> None:
+    try:
+        json.dumps(normalize_for_json(state), ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        print(f"normalize_for_json(final_state) 仍无法 JSON 序列化: {exc}")
+        return
+
+    print("normalize_for_json(final_state) 可以 JSON 序列化，但 raw final_state 不是 JSON-safe。")
+
+
+def _join_json_path(base_path: str, key: Any) -> str:
+    if isinstance(key, str) and key.isidentifier():
+        return f"{base_path}.{key}"
+    return f"{base_path}[{json.dumps(str(key), ensure_ascii=False)}]"
+
+
+def _qualified_type_name(value: Any) -> str:
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
+
+
+def _preview_value(value: Any) -> str:
+    try:
+        text = repr(value)
+    except Exception as exc:
+        text = f"<repr failed: {type(exc).__name__}: {exc}>"
+    text = " ".join(text.splitlines())
+    if len(text) > MAX_TEXT_LENGTH:
+        return text[:MAX_TEXT_LENGTH] + "...（已截断）"
+    return text
+
+
 def assert_graph_node_outputs(state: WorkflowState) -> None:
     require(not state.get("has_error"), f"图执行失败: {state.get('error_message')}")
     required_parts = set(state.get("required_data_parts", []))
@@ -545,6 +732,7 @@ def main() -> None:
         "prepare_company_context_node" in covered,
         "图未调度公司画像节点",
     )
+    assert_state_json_safe(state)
 
     print_step("完成")
     print("已覆盖的调度/数据阶段节点:")
