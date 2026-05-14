@@ -398,7 +398,7 @@ def print_node_update(node_name: str, update: dict[str, Any]) -> None:
 def covered_nodes_from_history(state: WorkflowState) -> set[str]:
     covered: set[str] = set()
     for record in state.get("execution_history", []):
-        node_name = EXECUTION_AGENT_TO_NODE.get(record.agent)
+        node_name = EXECUTION_AGENT_TO_NODE.get(record.get("agent"))
         if node_name:
             covered.add(node_name)
     return covered
@@ -407,10 +407,10 @@ def covered_nodes_from_history(state: WorkflowState) -> set[str]:
 def print_execution_history(state: WorkflowState) -> None:
     print("  图执行记录:")
     for index, record in enumerate(state.get("execution_history", []), 1):
-        result = "成功" if record.success else "失败"
+        result = "成功" if record.get("success") else "失败"
         print(
-            f"    {index}. {record.agent} | 阶段={record.step} | "
-            f"结果={result} | 消息={record.message}"
+            f"    {index}. {record.get('agent')} | 阶段={record.get('step')} | "
+            f"结果={result} | 消息={record.get('message')}"
         )
 
 
@@ -610,9 +610,9 @@ def assert_graph_node_outputs(state: WorkflowState) -> None:
     require(bool(state.get("company_profile")), "图执行后公司画像为空")
 
     fetched_parts = {
-        result.part_name
+        result.get("part_name")
         for result in state.get("data_part_results", [])
-        if getattr(result, "success", False)
+        if result.get("success")
     }
     require(
         set(FINANCIAL_PARTS).issubset(fetched_parts),
@@ -687,7 +687,7 @@ def run_await_user_input_probe(
     covered.add("await_user_input_node")
     print_node_update("await_user_input_node", update)
     require(
-        update["status"] == WorkflowStatus.NEEDS_USER_INPUT,
+        update["status"] == WorkflowStatus.NEEDS_USER_INPUT.value,
         "await_user_input_node 未设置 NEEDS_USER_INPUT 状态",
     )
     print_node_run_results(

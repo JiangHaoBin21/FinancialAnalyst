@@ -9,7 +9,7 @@ class DataCompletenessChecker:
 
     def check(
         self,
-        requested_time_range: TimeRange | None,
+        requested_time_range: TimeRange | dict | None,
         financial_data: dict[str, Any],
         required_parts: list[str] | None = None,
     ) -> DataCompletenessResult:
@@ -18,12 +18,13 @@ class DataCompletenessChecker:
 
         tables = list(required_parts or financial_data.keys() or settings.CORE_FINANCIAL_PARTS)
 
-        requested_start_year_month = (
-            f"{requested_time_range.start_year}.{requested_time_range.start_month:02d}"
-        )
-        requested_end_year_month = (
-            f"{requested_time_range.end_year}.{requested_time_range.end_month:02d}"
-        )
+        start_year = self._time_range_value(requested_time_range, "start_year")
+        start_month = self._time_range_value(requested_time_range, "start_month")
+        end_year = self._time_range_value(requested_time_range, "end_year")
+        end_month = self._time_range_value(requested_time_range, "end_month")
+
+        requested_start_year_month = f"{start_year}.{start_month:02d}"
+        requested_end_year_month = f"{end_year}.{end_month:02d}"
         expected_periods = generate_quarter_ends(
             requested_start_year_month,
             requested_end_year_month,
@@ -117,6 +118,12 @@ class DataCompletenessChecker:
         if len(text) == 8 and text.isdigit():
             return f"{text[:4]}-{text[4:6]}-{text[6:]}"
         return text
+
+    @staticmethod
+    def _time_range_value(time_range: TimeRange | dict, key: str) -> int:
+        if isinstance(time_range, dict):
+            return int(time_range[key])
+        return int(getattr(time_range, key))
 
     def get_completeness_reason(
         self,

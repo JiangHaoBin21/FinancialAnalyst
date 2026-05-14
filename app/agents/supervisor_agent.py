@@ -12,6 +12,8 @@ from app.workflows.state import (
     WorkflowStatus,
     WorkflowStep,
     next_workflow_step,
+    plan_step,
+    time_range_to_state,
 )
 
 
@@ -54,7 +56,7 @@ class SupervisorAgent:
             "task_type": self._to_task_type(planning_result.task_type),
             "company_name": planning_result.company_name,
             "ts_code": planning_result.ts_code,
-            "time_range": planning_result.time_range,
+            "time_range": time_range_to_state(planning_result.time_range),
             "analysis_focus": planning_result.analysis_focus,
             "output_mode": self._to_output_mode(planning_result.output_mode),
             "planner_message": planning_result.planner_message,
@@ -64,7 +66,7 @@ class SupervisorAgent:
             "task_plan": task_plan,
             "current_step_index": 0,
             "completed_step_ids": [],
-            "current_stage": WorkflowStep.SUPERVISOR,
+            "current_stage": WorkflowStep.SUPERVISOR.value,
             "next_step": None,
             "has_error": False,
             "error_message": None,
@@ -74,9 +76,9 @@ class SupervisorAgent:
     @staticmethod
     def _waiting_for_user_input_update(assistant_message: str) -> dict:
         return {
-            "status": WorkflowStatus.NEEDS_USER_INPUT,
-            "current_stage": WorkflowStep.AWAIT_USER_INPUT,
-            "next_step": WorkflowStep.AWAIT_USER_INPUT,
+            "status": WorkflowStatus.NEEDS_USER_INPUT.value,
+            "current_stage": WorkflowStep.AWAIT_USER_INPUT.value,
+            "next_step": WorkflowStep.AWAIT_USER_INPUT.value,
             "assistant_message": assistant_message,
             "is_finished": False,
             "has_error": False,
@@ -91,8 +93,8 @@ class SupervisorAgent:
         next_step = next_workflow_step(task_plan, 0)
         assistant_message = self._build_ready_message(planning_result)
         update = {
-            "status": WorkflowStatus.READY_FOR_EXECUTION,
-            "current_stage": WorkflowStep.SUPERVISOR,
+            "status": WorkflowStatus.READY_FOR_EXECUTION.value,
+            "current_stage": WorkflowStep.SUPERVISOR.value,
             "next_step": next_step,
             "assistant_message": assistant_message,
             "is_finished": False,
@@ -100,11 +102,11 @@ class SupervisorAgent:
             "error_message": None,
         }
 
-        if next_step == WorkflowStep.ERROR:
+        if next_step == WorkflowStep.ERROR.value:
             update.update(
                 {
                     "has_error": True,
-                    "status": WorkflowStatus.ERROR,
+                    "status": WorkflowStatus.ERROR.value,
                     "error_message": "Planner task_plan cannot be mapped to workflow steps.",
                     "assistant_message": "Planner task_plan cannot be mapped to workflow steps.",
                 }
@@ -115,9 +117,9 @@ class SupervisorAgent:
     @staticmethod
     def _empty_query_update() -> dict:
         return {
-            "status": WorkflowStatus.NEEDS_USER_INPUT,
-            "current_stage": WorkflowStep.AWAIT_USER_INPUT,
-            "next_step": WorkflowStep.AWAIT_USER_INPUT,
+            "status": WorkflowStatus.NEEDS_USER_INPUT.value,
+            "current_stage": WorkflowStep.AWAIT_USER_INPUT.value,
+            "next_step": WorkflowStep.AWAIT_USER_INPUT.value,
             "needs_user_input": True,
             "missing_fields": ["task_description"],
             "assistant_message": (
@@ -131,9 +133,9 @@ class SupervisorAgent:
     @staticmethod
     def _planning_exception_update(exc: Exception) -> dict:
         return {
-            "status": WorkflowStatus.ERROR,
-            "current_stage": WorkflowStep.SUPERVISOR,
-            "next_step": WorkflowStep.ERROR,
+            "status": WorkflowStatus.ERROR.value,
+            "current_stage": WorkflowStep.SUPERVISOR.value,
+            "next_step": WorkflowStep.ERROR.value,
             "needs_user_input": False,
             "assistant_message": "Planning failed; the workflow cannot continue.",
             "error_message": f"{type(exc).__name__}: {exc}",
@@ -184,20 +186,20 @@ class SupervisorAgent:
         )
 
     @staticmethod
-    def _to_task_type(value: str) -> TaskType:
+    def _to_task_type(value: str) -> str:
         if value == "financial_analysis":
-            return TaskType.FINANCIAL_ANALYSIS
-        return TaskType.UNKNOWN
+            return TaskType.FINANCIAL_ANALYSIS.value
+        return TaskType.UNKNOWN.value
 
     @staticmethod
-    def _to_output_mode(value: str) -> OutputMode:
+    def _to_output_mode(value: str) -> str:
         if value == "summary":
-            return OutputMode.SUMMARY
-        return OutputMode.REPORT
+            return OutputMode.SUMMARY.value
+        return OutputMode.REPORT.value
 
     @staticmethod
     def _to_state_plan_step(step: SkillPlanningStep) -> PlanStep:
-        return PlanStep(
+        return plan_step(
             step_id=step.step_id,
             agent=step.agent,
             action=step.action,

@@ -25,6 +25,7 @@ from app.workflows.state import (
     WorkflowStep,
     create_initial_state,
     error_update,
+    make_json_safe,
     normalize_for_json,
     next_workflow_step,
 )
@@ -49,15 +50,15 @@ class WorkflowGraph:
         self.enable_trace = enable_trace
         self.checkpointer = checkpointer
         # 单步执行时使用的步骤到节点函数映射。
-        self._route_table: dict[WorkflowStep, Callable[[WorkflowState], dict]] = {
-            WorkflowStep.SUPERVISOR: self.nodes.supervisor_node,
-            WorkflowStep.AWAIT_USER_INPUT: self.nodes.await_user_input_node,
-            WorkflowStep.DATA: self._run_data_stage_once,
-            WorkflowStep.ANALYSIS: self.nodes.analysis_node,
-            WorkflowStep.REPORT: self.nodes.report_node,
-            WorkflowStep.REFLECTION: self.nodes.reflection_node,
-            WorkflowStep.FINISHED: self.nodes.finish_node,
-            WorkflowStep.ERROR: self.nodes.error_node,
+        self._route_table: dict[str, Callable[[WorkflowState], dict]] = {
+            WorkflowStep.SUPERVISOR.value: self.nodes.supervisor_node,
+            WorkflowStep.AWAIT_USER_INPUT.value: self.nodes.await_user_input_node,
+            WorkflowStep.DATA.value: self._run_data_stage_once,
+            WorkflowStep.ANALYSIS.value: self.nodes.analysis_node,
+            WorkflowStep.REPORT.value: self.nodes.report_node,
+            WorkflowStep.REFLECTION.value: self.nodes.reflection_node,
+            WorkflowStep.FINISHED.value: self.nodes.finish_node,
+            WorkflowStep.ERROR.value: self.nodes.error_node,
         }
         # 编译后的 LangGraph 供完整运行路径复用。
         self._compiled_graph = self._build_langgraph()
@@ -104,8 +105,8 @@ class WorkflowGraph:
         if not normalized_input:
             return {
                 **state,
-                "status": WorkflowStatus.NEEDS_USER_INPUT,
-                "next_step": WorkflowStep.AWAIT_USER_INPUT,
+                "status": WorkflowStatus.NEEDS_USER_INPUT.value,
+                "next_step": WorkflowStep.AWAIT_USER_INPUT.value,
                 "assistant_message": "你还没有补充有效信息，请继续告诉我缺失的内容。",
             }
 
@@ -123,9 +124,9 @@ class WorkflowGraph:
             "assistant_message": None,
             "has_error": False,
             "error_message": None,
-            "current_stage": WorkflowStep.SUPERVISOR,
-            "next_step": WorkflowStep.SUPERVISOR,
-            "status": WorkflowStatus.INIT,
+            "current_stage": WorkflowStep.SUPERVISOR.value,
+            "next_step": WorkflowStep.SUPERVISOR.value,
+            "status": WorkflowStatus.INIT.value,
             "is_finished": False,
         }
         return self.continue_from_state(resumed_state)
@@ -269,7 +270,7 @@ class WorkflowGraph:
             if self.enable_trace:
                 self._trace(state, prefix=f"[langgraph.before:{node_fn.__name__}]")
 
-            update = node_fn(state)
+            update = make_json_safe(node_fn(state))
 
             if self.enable_trace:
                 preview_state = self._merge_state_update(state, update)
@@ -281,51 +282,52 @@ class WorkflowGraph:
 
     def _route_after_node(self, state: WorkflowState) -> str:
         """根据节点执行后的状态选择下一条 LangGraph 边。"""
-        if state.get("current_stage") == WorkflowStep.FINISHED or state.get("is_finished"):
-            return "end" if state.get("current_stage") == WorkflowStep.FINISHED else "finished"
+        if state.get("current_stage") == WorkflowStep.FINISHED.value or state.get("is_finished"):
+            return "end" if state.get("current_stage") == WorkflowStep.FINISHED.value else "finished"
 
-        if state.get("next_step") == WorkflowStep.AWAIT_USER_INPUT or state.get("status") == WorkflowStatus.NEEDS_USER_INPUT:
-            return "end" if state.get("current_stage") == WorkflowStep.AWAIT_USER_INPUT else "await_user_input"
+        if state.get("next_step") == WorkflowStep.AWAIT_USER_INPUT.value or state.get("status") == WorkflowStatus.NEEDS_USER_INPUT.value:
+            return "end" if state.get("current_stage") == WorkflowStep.AWAIT_USER_INPUT.value else "await_user_input"
 
-        if state.get("next_step") == WorkflowStep.ERROR or state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
-            return "end" if state.get("current_stage") == WorkflowStep.ERROR else "error"
+        if state.get("next_step") == WorkflowStep.ERROR.value or state.get("has_error") or state.get("status") == WorkflowStatus.ERROR.value:
+            return "end" if state.get("current_stage") == WorkflowStep.ERROR.value else "error"
 
         next_step = state.get("next_step")
-        if next_step == WorkflowStep.DATA:
+        if next_step == WorkflowStep.DATA.value:
             return "data"
-        if next_step == WorkflowStep.ANALYSIS:
+        if next_step == WorkflowStep.ANALYSIS.value:
             return "analysis"
-        if next_step == WorkflowStep.REPORT:
+        if next_step == WorkflowStep.REPORT.value:
             return "report"
-        if next_step == WorkflowStep.REFLECTION:
+        if next_step == WorkflowStep.REFLECTION.value:
             return "reflection"
-        if next_step == WorkflowStep.FINISHED:
+        if next_step == WorkflowStep.FINISHED.value:
             return "finished"
 
         return "error"
 
 
     @staticmethod
-    def _infer_entry_step(state: WorkflowState) -> WorkflowStep:
+    def _infer_entry_step(state: WorkflowState) -> str:
         """根据已有状态推断恢复执行时的入口步骤。"""
-        if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
-            return WorkflowStep.ERROR
-        if state.get("is_finished") or state.get("status") == WorkflowStatus.FINISHED:
-            return WorkflowStep.FINISHED
-        if state.get("needs_user_input") or state.get("status") == WorkflowStatus.NEEDS_USER_INPUT:
-            return WorkflowStep.AWAIT_USER_INPUT
+        if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR.value:
+            return WorkflowStep.ERROR.value
+        if state.get("is_finished") or state.get("status") == WorkflowStatus.FINISHED.value:
+            return WorkflowStep.FINISHED.value
+        if state.get("needs_user_input") or state.get("status") == WorkflowStatus.NEEDS_USER_INPUT.value:
+            return WorkflowStep.AWAIT_USER_INPUT.value
         if state.get("task_plan"):
             return next_workflow_step(
                 state.get("task_plan", []),
                 state.get("current_step_index", 0),
             )
-        return WorkflowStep.SUPERVISOR
+        return WorkflowStep.SUPERVISOR.value
 
     @staticmethod
     def _merge_state_update(state: WorkflowState, update: dict) -> WorkflowState:
         """合并节点局部更新，列表型观测字段采用追加语义。"""
         merged = dict(state)
         for key, value in update.items():
+            value = make_json_safe(value)
             if key in {"execution_history", "data_part_results", "data_fetch_errors"}:
                 merged[key] = list(merged.get(key, [])) + list(value or [])
             else:

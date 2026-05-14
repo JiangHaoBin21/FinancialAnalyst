@@ -32,7 +32,7 @@ def data_route_path_map() -> dict[str, str]:
 
 
 def route_data_parts(state: WorkflowState) -> list[str]:
-    if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR:
+    if state.get("has_error") or state.get("status") == WorkflowStatus.ERROR.value:
         return ["data_error"]
 
     if state.get("data_summary"):

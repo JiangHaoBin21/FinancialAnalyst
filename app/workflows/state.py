@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
+from math import isfinite
 from typing import Annotated, Any, Optional, TypedDict
 
 from app.domain.models import TimeRange
@@ -56,37 +59,10 @@ class WorkflowStatus(str, Enum):
     ERROR = "error"
 
 
-@dataclass
-class PlanStep:
-    """由 Supervisor 规划器生成的高层 Agent 步骤。"""
-
-    step_id: int
-    agent: str
-    action: str
-    description: str
-    status: PlanStepStatus = PlanStepStatus.PENDING
-
-
-@dataclass
-class ExecutionRecord:
-    """用于观测图节点和 Agent 执行过程的记录。"""
-
-    step: str
-    agent: str
-    success: bool
-    message: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class DataPartResult:
-    """并行数据抓取节点产出的单个数据分片结果。"""
-
-    part_name: str
-    payload: Any
-    success: bool = True
-    message: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
+PlanStep = dict[str, Any]
+ExecutionRecord = dict[str, Any]
+DataPartResult = dict[str, Any]
+TimeRangeState = dict[str, int]
 
 
 class WorkflowState(TypedDict, total=False):
@@ -94,12 +70,12 @@ class WorkflowState(TypedDict, total=False):
     user_query: str
 
     # Supervisor 与规划层
-    task_type: TaskType
+    task_type: str
     company_name: Optional[str]
     ts_code: Optional[str]
-    time_range: Optional[TimeRange]
+    time_range: Optional[TimeRangeState]
     analysis_focus: Optional[str]
-    output_mode: OutputMode
+    output_mode: str
     planner_message: Optional[str]
     raw_planner_response: Optional[str]
     needs_user_input: bool
@@ -140,9 +116,9 @@ class WorkflowState(TypedDict, total=False):
     replan_required: bool
 
     # 流程控制
-    current_stage: WorkflowStep
-    next_step: Optional[WorkflowStep]
-    status: WorkflowStatus
+    current_stage: str
+    next_step: Optional[str]
+    status: str
     is_finished: bool
     has_error: bool
     error_message: Optional[str]
@@ -178,12 +154,12 @@ def create_initial_state(user_query: str) -> WorkflowState:
     """创建完整初始状态，确保图节点可以安全读取默认值。"""
     return {
         "user_query": user_query,
-        "task_type": TaskType.UNKNOWN,
+        "task_type": TaskType.UNKNOWN.value,
         "company_name": None,
         "ts_code": None,
         "time_range": None,
         "analysis_focus": None,
-        "output_mode": OutputMode.REPORT,
+        "output_mode": OutputMode.REPORT.value,
         "planner_message": None,
         "raw_planner_response": None,
         "needs_user_input": False,
@@ -208,9 +184,9 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "reflection_result": {},
         "needs_revision": False,
         "replan_required": False,
-        "current_stage": WorkflowStep.SUPERVISOR,
-        "next_step": WorkflowStep.SUPERVISOR,
-        "status": WorkflowStatus.INIT,
+        "current_stage": WorkflowStep.SUPERVISOR.value,
+        "next_step": WorkflowStep.SUPERVISOR.value,
+        "status": WorkflowStatus.INIT.value,
         "is_finished": False,
         "has_error": False,
         "error_message": None,
@@ -229,13 +205,48 @@ def execution_record(
     metadata: Optional[dict[str, Any]] = None,
 ) -> ExecutionRecord:
     """创建统一格式的执行记录。"""
-    return ExecutionRecord(
-        step=step,
-        agent=agent,
-        success=success,
-        message=message,
-        metadata=metadata or {},
-    )
+    return {
+        "step": state_value(step),
+        "agent": str(agent),
+        "success": bool(success),
+        "message": str(message or ""),
+        "metadata": make_json_safe(metadata or {}),
+    }
+
+
+def data_part_result(
+    part_name: str,
+    payload: Any,
+    success: bool = True,
+    message: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+) -> DataPartResult:
+    """创建 JSON-safe 的单个数据分片结果。"""
+    return {
+        "part_name": str(part_name),
+        "payload": make_json_safe(payload),
+        "success": bool(success),
+        "message": str(message or ""),
+        "metadata": make_json_safe(metadata or {}),
+    }
+
+
+def plan_step(
+    *,
+    step_id: int,
+    agent: str,
+    action: str,
+    description: str,
+    status: PlanStepStatus | str = PlanStepStatus.PENDING,
+) -> PlanStep:
+    """创建 JSON-safe 的计划步骤。"""
+    return {
+        "step_id": int(step_id),
+        "agent": str(agent),
+        "action": str(action),
+        "description": str(description),
+        "status": state_value(status),
+    }
 
 
 def get_current_plan_step(state: WorkflowState) -> Optional[PlanStep]:
@@ -249,23 +260,23 @@ def get_current_plan_step(state: WorkflowState) -> Optional[PlanStep]:
 
 def update_current_plan_step_status(
     state: WorkflowState,
-    status: PlanStepStatus,
+    status: PlanStepStatus | str,
 ) -> list[PlanStep]:
     """返回更新了当前步骤状态的新计划列表。"""
     # 复制计划步骤，避免原地修改传入状态。
     task_plan = [
-        PlanStep(
-            step_id=step.step_id,
-            agent=step.agent,
-            action=step.action,
-            description=step.description,
-            status=step.status,
+        plan_step(
+            step_id=step.get("step_id", 0),
+            agent=step.get("agent", ""),
+            action=step.get("action", ""),
+            description=step.get("description", ""),
+            status=step.get("status", PlanStepStatus.PENDING.value),
         )
         for step in state.get("task_plan", [])
     ]
     index = state.get("current_step_index", 0)
     if 0 <= index < len(task_plan):
-        task_plan[index].status = status
+        task_plan[index]["status"] = state_value(status)
     return task_plan
 
 
@@ -274,8 +285,9 @@ def complete_current_plan_step(state: WorkflowState) -> dict[str, Any]:
     task_plan = update_current_plan_step_status(state, PlanStepStatus.DONE)
     step = get_current_plan_step(state)
     completed_step_ids = list(state.get("completed_step_ids", []))
-    if step is not None and step.step_id not in completed_step_ids:
-        completed_step_ids.append(step.step_id)
+    step_id = step.get("step_id") if step else None
+    if step_id is not None and step_id not in completed_step_ids:
+        completed_step_ids.append(step_id)
 
     current_step_index = state.get("current_step_index", 0) + 1
     # 计划索引推进后，重新计算下一类工作流节点。
@@ -296,25 +308,28 @@ def fail_current_plan_step(state: WorkflowState) -> dict[str, Any]:
 def next_workflow_step(
     task_plan: list[PlanStep],
     current_step_index: int,
-) -> WorkflowStep:
+) -> str:
     """根据计划中的 Agent 名称计算下一类工作流步骤。"""
     if current_step_index < 0 or current_step_index >= len(task_plan):
-        return WorkflowStep.FINISHED
+        return WorkflowStep.FINISHED.value
 
     # 计划步骤中的 Agent 名称决定下一类工作流节点。
     agent_to_workflow_step = {
-        "DataAgent": WorkflowStep.DATA,
-        "AnalysisAgent": WorkflowStep.ANALYSIS,
-        "ReportAgent": WorkflowStep.REPORT,
-        "ReflectionAgent": WorkflowStep.REFLECTION,
+        "DataAgent": WorkflowStep.DATA.value,
+        "AnalysisAgent": WorkflowStep.ANALYSIS.value,
+        "ReportAgent": WorkflowStep.REPORT.value,
+        "ReflectionAgent": WorkflowStep.REFLECTION.value,
     }
-    return agent_to_workflow_step.get(task_plan[current_step_index].agent, WorkflowStep.ERROR)
+    return agent_to_workflow_step.get(
+        str(task_plan[current_step_index].get("agent", "")),
+        WorkflowStep.ERROR.value,
+    )
 
 
 def is_current_plan_agent(state: WorkflowState, expected_agent: str) -> bool:
     """判断当前计划步骤是否应该由指定 Agent 执行。"""
     step = get_current_plan_step(state)
-    return step is not None and step.agent == expected_agent
+    return step is not None and step.get("agent") == expected_agent
 
 
 def error_update(message: str) -> dict[str, Any]:
@@ -322,9 +337,9 @@ def error_update(message: str) -> dict[str, Any]:
     return {
         "has_error": True,
         "error_message": message,
-        "status": WorkflowStatus.ERROR,
-        "current_stage": WorkflowStep.ERROR,
-        "next_step": WorkflowStep.ERROR,
+        "status": WorkflowStatus.ERROR.value,
+        "current_stage": WorkflowStep.ERROR.value,
+        "next_step": WorkflowStep.ERROR.value,
         "is_finished": False,
         "assistant_message": message,
     }
@@ -332,12 +347,51 @@ def error_update(message: str) -> dict[str, Any]:
 
 def normalize_for_json(obj: Any) -> Any:
     """递归转换 dataclass 和枚举，生成 JSON 友好的对象。"""
-    if is_dataclass(obj):
-        return normalize_for_json(asdict(obj))
-    if isinstance(obj, dict):
-        return {k: normalize_for_json(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [normalize_for_json(v) for v in obj]
-    if hasattr(obj, "value"):
+    return make_json_safe(obj)
+
+
+def make_json_safe(obj: Any) -> Any:
+    """把常见 Python 对象转换为 JSON-native 值。"""
+    if isinstance(obj, Enum):
         return obj.value
-    return obj
+    if obj is None or isinstance(obj, (str, bool, int)):
+        return obj
+    if isinstance(obj, float):
+        return obj if isfinite(obj) else None
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if is_dataclass(obj):
+        return make_json_safe(asdict(obj))
+    if isinstance(obj, dict):
+        return {str(make_json_safe(k)): make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(v) for v in obj]
+    return str(obj)
+
+
+def state_value(value: Any) -> Any:
+    """返回适合写入 state 的标量值。"""
+    return value.value if isinstance(value, Enum) else value
+
+
+def time_range_to_state(value: TimeRange | dict[str, Any] | None) -> TimeRangeState | None:
+    """把 TimeRange 转为可写入 state 的 JSON-safe dict。"""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {
+            "start_year": int(value["start_year"]),
+            "start_month": int(value["start_month"]),
+            "end_year": int(value["end_year"]),
+            "end_month": int(value["end_month"]),
+        }
+    return {
+        "start_year": int(value.start_year),
+        "start_month": int(value.start_month),
+        "end_year": int(value.end_year),
+        "end_month": int(value.end_month),
+    }

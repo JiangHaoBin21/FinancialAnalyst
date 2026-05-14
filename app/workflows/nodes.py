@@ -69,8 +69,8 @@ class WorkflowNodes:
             "I need more information before continuing the analysis."
         )
         return {
-            "current_stage": WorkflowStep.AWAIT_USER_INPUT,
-            "status": WorkflowStatus.NEEDS_USER_INPUT,
+            "current_stage": WorkflowStep.AWAIT_USER_INPUT.value,
+            "status": WorkflowStatus.NEEDS_USER_INPUT.value,
             "is_finished": False,
             "assistant_message": message,
             "execution_history": [
@@ -134,9 +134,9 @@ class WorkflowNodes:
         final_response = state.get("final_report") or state.get("final_response")
         message = state.get("assistant_message") or "Workflow finished."
         return {
-            "current_stage": WorkflowStep.FINISHED,
-            "status": WorkflowStatus.FINISHED,
-            "next_step": WorkflowStep.FINISHED,
+            "current_stage": WorkflowStep.FINISHED.value,
+            "status": WorkflowStatus.FINISHED.value,
+            "next_step": WorkflowStep.FINISHED.value,
             "is_finished": True,
             "final_response": final_response,
             "assistant_message": message,
@@ -156,9 +156,9 @@ class WorkflowNodes:
             "Workflow execution failed."
         )
         return {
-            "current_stage": WorkflowStep.ERROR,
-            "status": WorkflowStatus.ERROR,
-            "next_step": WorkflowStep.ERROR,
+            "current_stage": WorkflowStep.ERROR.value,
+            "status": WorkflowStatus.ERROR.value,
+            "next_step": WorkflowStep.ERROR.value,
             "is_finished": False,
             "assistant_message": message,
             "execution_history": [
@@ -218,11 +218,11 @@ class WorkflowNodes:
 
         merged = {**state_for_agent, **agent_update}
         # Agent 可以主动请求补充信息，此时工作流暂停到等待用户输入节点。
-        if merged.get("next_step") == WorkflowStep.AWAIT_USER_INPUT:
+        if merged.get("next_step") == WorkflowStep.AWAIT_USER_INPUT.value:
             return {
                 **agent_update,
-                "status": WorkflowStatus.NEEDS_USER_INPUT,
-                "current_stage": node_step,
+                "status": WorkflowStatus.NEEDS_USER_INPUT.value,
+                "current_stage": node_step.value,
                 "execution_history": [
                     execution_record(
                         step=node_step.value,
@@ -235,11 +235,11 @@ class WorkflowNodes:
             }
 
         # Agent 可以要求回到 Supervisor 重新规划后续步骤。
-        if merged.get("next_step") == WorkflowStep.SUPERVISOR:
+        if merged.get("next_step") == WorkflowStep.SUPERVISOR.value:
             return {
                 **agent_update,
-                "status": WorkflowStatus.READY_FOR_EXECUTION,
-                "current_stage": node_step,
+                "status": WorkflowStatus.READY_FOR_EXECUTION.value,
+                "current_stage": node_step.value,
                 "execution_history": [
                     execution_record(
                         step=node_step.value,
@@ -252,13 +252,13 @@ class WorkflowNodes:
             }
 
         # 错误状态会标记当前计划步骤失败，并交给错误节点收尾。
-        if merged.get("next_step") == WorkflowStep.ERROR or merged.get("has_error"):
+        if merged.get("next_step") == WorkflowStep.ERROR.value or merged.get("has_error"):
             update = {
                 **agent_update,
                 **fail_current_plan_step(state),
-                "status": WorkflowStatus.ERROR,
-                "current_stage": WorkflowStep.ERROR,
-                "next_step": WorkflowStep.ERROR,
+                "status": WorkflowStatus.ERROR.value,
+                "current_stage": WorkflowStep.ERROR.value,
+                "next_step": WorkflowStep.ERROR.value,
                 "has_error": True,
                 "error_message": merged.get("error_message") or f"{expected_agent} failed.",
             }
@@ -280,8 +280,8 @@ class WorkflowNodes:
         return {
             **agent_update,
             **plan_update,
-            "current_stage": node_step,
-            "status": success_status,
+            "current_stage": node_step.value,
+            "status": success_status.value,
             "assistant_message": message,
             "execution_history": [
                 execution_record(
@@ -323,4 +323,3 @@ class WorkflowNodes:
 def _enum_value(value: Any) -> Any:
     """返回枚举的原始值；非枚举对象保持不变。"""
     return value.value if hasattr(value, "value") else value
-

@@ -16,16 +16,17 @@ from app.workflows.state import (
     DATA_PART_COMPANY_PROFILE,
     DATA_PART_INCOME,
     DATA_PART_INDICATORS,
-    DataPartResult,
     PlanStepStatus,
     WorkflowState,
     WorkflowStatus,
     WorkflowStep,
     complete_current_plan_step,
+    data_part_result,
     error_update,
     execution_record,
     fail_current_plan_step,
     is_current_plan_agent,
+    make_json_safe,
     update_current_plan_step_status,
 )
 
@@ -90,8 +91,8 @@ class DataSubgraphNodes:
 
         return {
             **update,
-            "current_stage": WorkflowStep.DATA,
-            "status": WorkflowStatus.DATA_PLANNED,
+            "current_stage": WorkflowStep.DATA.value,
+            "status": WorkflowStatus.DATA_PLANNED.value,
             "task_plan": update_current_plan_step_status(state, PlanStepStatus.RUNNING),
             "data_part_results": [],
             "data_fetch_errors": [],
@@ -148,7 +149,7 @@ class DataSubgraphNodes:
                 message="DataAgent failed: company profile missing company name.",
             )
 
-        company_profile = {**company_profile, "name": resolved_company_name}
+        company_profile = make_json_safe({**company_profile, "name": resolved_company_name})
 
         return {
             "ts_code": company_profile["ts_code"],
@@ -248,7 +249,7 @@ class DataSubgraphNodes:
 
         financial_data = defaultdict(list)
         for result in results:
-            financial_data[result.part_name].append(result.payload)
+            financial_data[result["part_name"]].append(result["payload"])
 
         return {
             "financial_data": dict(financial_data),
@@ -389,8 +390,8 @@ class DataSubgraphNodes:
 
         return {
             **plan_update,
-            "current_stage": WorkflowStep.DATA,
-            "status": WorkflowStatus.DATA_READY,
+            "current_stage": WorkflowStep.DATA.value,
+            "status": WorkflowStatus.DATA_READY.value,
             "execution_history": [
                 execution_record(
                     step=WorkflowStep.DATA.value,
@@ -406,7 +407,7 @@ class DataSubgraphNodes:
         """把单个数据分片结果包装成 LangGraph 可合并的局部更新。"""
         return {
             "data_part_results": [
-                DataPartResult(
+                data_part_result(
                     part_name=part_name,
                     payload=payload,
                     success=True,
@@ -457,9 +458,9 @@ class DataSubgraphNodes:
         message = state.get("error_message") or state.get("assistant_message") or "Data stage failed."
 
         return {
-            "current_stage": WorkflowStep.DATA,
-            "status": WorkflowStatus.ERROR,
-            "next_step": WorkflowStep.ERROR,
+            "current_stage": WorkflowStep.DATA.value,
+            "status": WorkflowStatus.ERROR.value,
+            "next_step": WorkflowStep.ERROR.value,
             "has_error": True,
             "assistant_message": message,
             "execution_history": [

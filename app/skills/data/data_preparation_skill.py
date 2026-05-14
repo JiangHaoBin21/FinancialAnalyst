@@ -52,7 +52,7 @@ class DataPreparationSkill:
     def prepare(
         self,
         *,
-        time_range: TimeRange,
+        time_range: TimeRange | dict,
         required_parts: list[str],
         company_profile: dict[str, Any],
         backfill: dict[str, list] = None
