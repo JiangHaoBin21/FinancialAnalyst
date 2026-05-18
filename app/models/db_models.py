@@ -65,6 +65,25 @@ class Income(Base):
     end_date = Column(Date, nullable=False, comment="报告期")
     report_type = Column(String(20), comment="报表类型")
     comp_type = Column(String(20), comment="公司类型")
+    # 报告期类型
+    end_type = Column(String(20), comment="报告期类型")
+
+    # 成本费用拆解
+    biz_tax_surchg = Column(Numeric(20, 4), comment="营业税金及附加")
+    rd_exp = Column(Numeric(20, 4), comment="研发费用")
+    fin_exp_int_exp = Column(Numeric(20, 4), comment="财务费用:利息费用")
+    fin_exp_int_inc = Column(Numeric(20, 4), comment="财务费用:利息收入")
+
+    # 利润质量与非主营损益
+    fv_value_chg_gain = Column(Numeric(20, 4), comment="公允价值变动净收益")
+    oth_income = Column(Numeric(20, 4), comment="其他收益")
+    asset_disp_income = Column(Numeric(20, 4), comment="资产处置收益")
+    non_oper_income = Column(Numeric(20, 4), comment="营业外收入")
+    non_oper_exp = Column(Numeric(20, 4), comment="营业外支出")
+
+    # 减值相关
+    credit_impa_loss = Column(Numeric(20, 4), comment="信用减值损失")
+    oth_impair_loss_assets = Column(Numeric(20, 4), comment="其他资产减值损失")
 
     basic_eps = Column(Numeric(20, 4), comment="基本每股收益")
     diluted_eps = Column(Numeric(20, 4), comment="稀释每股收益")
@@ -80,7 +99,7 @@ class Income(Base):
     operate_profit = Column(Numeric(20, 4), comment="营业利润")
     total_profit = Column(Numeric(20, 4), comment="利润总额")
     income_tax = Column(Numeric(20, 4), comment="所得税费用")
-    net_profit = Column(Numeric(20, 4), comment="净利润")
+    n_income = Column(Numeric(20, 4), comment="净利润")
     n_income_attr_p = Column(Numeric(20, 4), comment="归属于母公司股东的净利润")
     minority_gain = Column(Numeric(20, 4), comment="少数股东损益")
     oth_compr_income = Column(Numeric(20, 4), comment="其他综合收益")
@@ -130,7 +149,7 @@ class BalanceSheet(Base):
     total_nca = Column(Numeric(20, 4), comment="非流动资产合计")
     total_assets = Column(Numeric(20, 4), comment="资产总计")
 
-    short_term_borr = Column(Numeric(20, 4), comment="短期借款")
+    st_borr = Column(Numeric(20, 4), comment="短期借款")
     notes_payable = Column(Numeric(20, 4), comment="应付票据")
     acct_payable = Column(Numeric(20, 4), comment="应付账款")
     adv_receipts = Column(Numeric(20, 4), comment="预收款项")
@@ -141,6 +160,24 @@ class BalanceSheet(Base):
 
     total_hldr_eqy_exc_min_int = Column(Numeric(20, 4), comment="归属于母公司股东权益合计")
     total_hldr_eqy_inc_min_int = Column(Numeric(20, 4), comment="股东权益合计(含少数股东权益)")
+
+    # 有息负债相关
+    non_cur_liab_due_1y = Column(Numeric(20, 4), comment="一年内到期的非流动负债")
+    lt_borr = Column(Numeric(20, 4), comment="长期借款")
+    st_bonds_payable = Column(Numeric(20, 4), comment="应付短期债券")
+    lease_liab = Column(Numeric(20, 4), comment="租赁负债")
+
+    # 经营占款相关
+    accounts_receiv_bill = Column(Numeric(20, 4), comment="应收票据及应收账款")
+    accounts_pay = Column(Numeric(20, 4), comment="应付票据及应付账款")
+    contract_assets = Column(Numeric(20, 4), comment="合同资产")
+    contract_liab = Column(Numeric(20, 4), comment="合同负债")
+
+    # 资产质量相关
+    goodwill = Column(Numeric(20, 4), comment="商誉")
+    intan_assets = Column(Numeric(20, 4), comment="无形资产")
+    fix_assets_total = Column(Numeric(20, 4), comment="固定资产合计")
+    cip_total = Column(Numeric(20, 4), comment="在建工程合计")
 
     update_flag = Column(String(10), comment="更新标志")
     source = Column(String(50), nullable=False, default="tushare", comment="数据来源")
@@ -172,6 +209,36 @@ class CashFlow(Base):
     end_date = Column(Date, nullable=False, comment="报告期")
     report_type = Column(String(20), comment="报表类型")
     comp_type = Column(String(20), comment="公司类型")
+
+    # 报告期类型
+    end_type = Column(String(20), comment="报告期类型")
+
+    # 经营活动现金流结构
+    c_fr_oth_operate_a = Column(Numeric(20, 4), comment="收到其他与经营活动有关的现金")
+    c_inf_fr_operate_a = Column(Numeric(20, 4), comment="经营活动现金流入小计")
+    oth_cash_pay_oper_act = Column(Numeric(20, 4), comment="支付其他与经营活动有关的现金")
+    st_cash_out_act = Column(Numeric(20, 4), comment="经营活动现金流出小计")
+
+    # 投资活动现金流结构
+    stot_inflows_inv_act = Column(Numeric(20, 4), comment="投资活动现金流入小计")
+    c_pay_acq_const_fiolta = Column(Numeric(20, 4), comment="购建固定资产、无形资产和其他长期资产支付的现金")
+    c_paid_invest = Column(Numeric(20, 4), comment="投资支付的现金")
+    stot_out_inv_act = Column(Numeric(20, 4), comment="投资活动现金流出小计")
+
+    # 筹资活动现金流结构
+    c_recp_cap_contrib = Column(Numeric(20, 4), comment="吸收投资收到的现金")
+    oth_cash_recp_ral_fnc_act = Column(Numeric(20, 4), comment="收到其他与筹资活动有关的现金")
+    stot_cash_in_fnc_act = Column(Numeric(20, 4), comment="筹资活动现金流入小计")
+    stot_cashout_fnc_act = Column(Numeric(20, 4), comment="筹资活动现金流出小计")
+
+    # 间接法与利润现金流调节
+    net_profit = Column(Numeric(20, 4), comment="净利润")
+    depr_fa_coga_dpba = Column(Numeric(20, 4), comment="固定资产折旧、油气资产折耗、生产性生物资产折旧")
+    amort_intang_assets = Column(Numeric(20, 4), comment="无形资产摊销")
+    decr_inventories = Column(Numeric(20, 4), comment="存货的减少")
+    decr_oper_payable = Column(Numeric(20, 4), comment="经营性应收项目的减少")
+    incr_oper_payable = Column(Numeric(20, 4), comment="经营性应付项目的增加")
+    im_net_cashflow_oper_act = Column(Numeric(20, 4), comment="经营活动产生的现金流量净额(间接法)")
 
     c_fr_sale_sg = Column(Numeric(20, 4), comment="销售商品、提供劳务收到的现金")
     recp_tax_rends = Column(Numeric(20, 4), comment="收到的税费返还")
