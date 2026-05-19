@@ -59,27 +59,17 @@ class OpenAIClient(BaseLLMClient):
         self.client = OpenAI(**client_kwargs)
         self.model = self.config.model
 
-    def generate(self, user_prompt: str, system_prompt: str = None, **kwargs: Any) -> str:
+    def generate(self, messages: list[dict[str, str]], tools: list = None, **kwargs: Any):
         """
         单轮文本生成。
 
         这里内部仍然走 chat completions，只是帮上层把 prompt
         自动包装成单条 user message。
         """
-        if not user_prompt or not user_prompt.strip():
-            raise ValueError("prompt 不能为空")
-
-        if system_prompt:
-            messages = [
-                {"role": "system", "content": system_prompt.strip()},
-                {"role": "user", "content": user_prompt.strip()}
-            ]
+        if not tools:
+            return self.chat(messages=messages, **kwargs)
         else:
-            messages = [
-                {"role": "user", "content": user_prompt.strip()}
-            ]
-
-        return self.chat(messages=messages, **kwargs)
+            return self.chat_tools(messages=messages, tools=tools, **kwargs)
 
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """
@@ -112,3 +102,38 @@ class OpenAIClient(BaseLLMClient):
             return ""
 
         return content.strip()
+
+    def chat_tools(self, messages: list[dict[str, str]], tools: list, **kwargs: Any):
+        """
+        多轮对话生成。
+
+        messages 示例：
+        [
+            {"role": "system", "content": "..."},
+            {"role": "user", "content": "..."}
+        ]
+        """
+        if not messages:
+            raise ValueError("messages 不能为空")
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                tools_choice="auto",
+                extra_body={"thinking": {"type": "enabled"}},
+                **kwargs,
+            )
+        except Exception as e:
+            raise LLMClientError(f"OpenAI 调用失败: {str(e)}") from e
+
+        try:
+            content = response.choices[0].message
+        except Exception as e:
+            raise LLMClientError(f"OpenAI 返回结果解析失败: {str(e)}") from e
+
+        if content is None:
+            return ""
+
+        return content
