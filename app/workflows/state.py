@@ -126,6 +126,8 @@ class WorkflowState(TypedDict, total=False):
     trans_message: Optional[str]
     # 给人看的消息
     assistant_message: Optional[str]
+    last_completed_stage: str | None
+    stage_outputs: dict | None
 
     # 可观测性
     execution_history: Annotated[list[ExecutionRecord], append_list]
@@ -192,6 +194,8 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "error_message": None,
         "assistant_message": None,
         "trans_message": None,
+        "last_completed_stage": None,
+        "stage_outputs": None,
         "execution_history": [],
         "final_response": None,
     }

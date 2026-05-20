@@ -17,7 +17,7 @@ class BaseLLMClient(ABC):
     """
 
     @abstractmethod
-    def generate(self, user_prompt: str, system_prompt: str, **kwargs: Any) -> str:
+    def generate(self, messages: list[dict[str, str]], tools: list = None, **kwargs: Any) -> str:
         """
         单轮文本生成。
         """

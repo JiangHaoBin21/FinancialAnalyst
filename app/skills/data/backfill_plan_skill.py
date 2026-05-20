@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Any
 
 from app.skills.data.data_prompt_builder import build_data_backfill_user_prompt, build_data_backfill_system_prompt
-from app.skills.planning.planning_parser import parse_json_response
+from app.skills.supervisor.planning_parser import parse_json_response
 
 
 class BackfillPlanSkill:
@@ -16,7 +16,17 @@ class BackfillPlanSkill:
         调用大模型。
         约定 llm_client 提供 generate(user_prompt: str, system_prompt: str) -> str 接口。
         """
-        return self.llm_client.generate(user_prompt=user_prompt, system_prompt=system_prompt)
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ]
+        return self.llm_client.generate(messages=messages)
 
     def backfill_plan(self, analysis_focus, data_completeness_check_result: dict[str, Any]):
         """

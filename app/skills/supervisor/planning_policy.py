@@ -1,4 +1,4 @@
-# app/skills/planning/planning_policy.py
+# app/skills/supervisor/planning_policy.py
 
 from __future__ import annotations
 

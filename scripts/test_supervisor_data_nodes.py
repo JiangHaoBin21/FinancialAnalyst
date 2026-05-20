@@ -38,7 +38,7 @@ from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.skills.data.completeness_check_skill import CompletenessCheckSkill
 from app.skills.data.data_preparation_skill import DataPreparationSkill
 from app.skills.data.required_parts_skill import RequiredPartsSkill
-from app.skills.planning.planning_skill import PlanningSkill
+from app.skills.supervisor.planning_skill import PlanningSkill
 from app.workflows.graph import WorkflowGraph
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.subgraphs.data_nodes import DataSubgraphNodes

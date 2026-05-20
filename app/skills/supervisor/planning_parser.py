@@ -1,4 +1,4 @@
-# app/skills/planning/planning_parser.py
+# app/skills/supervisor/planning_parser.py
 
 """Planning parser: 负责将 planner 的原始文本输出解析为系统内部的 PlanningResult。"""
 

@@ -8,7 +8,7 @@ from app.skills.analysis.fina_indicator_evidence_tool import build_fina_indicato
 from app.skills.analysis.income_statement_evidence_tool import build_income_evidence
 from app.skills.analysis.metric_groups import INCOME_GROUPS, BALANCE_SHEET_GROUPS, CASHFLOW_GROUPS, \
     FINA_INDICATOR_GROUPS, CROSS_STATEMENT_GROUPS
-from app.skills.planning.planning_parser import parse_json_response
+from app.skills.supervisor.planning_parser import parse_json_response
 
 
 class AnalysisAgent:
@@ -19,6 +19,16 @@ class AnalysisAgent:
     ):
         self.llm_client = llm_client
         self.max_tool_rounds = max_tool_rounds
+
+    def run(self, state_for_agent: dict):
+        return self.analyze(
+            user_query=state_for_agent["user_query"],
+            analysis_focus=state_for_agent["analysis_focus"],
+            company_profile=state_for_agent["company_profile"],
+            time_range=state_for_agent["time_range"],
+            financial_data=state_for_agent["financial_data"],
+            trans_message=state_for_agent["trans_message"]
+        )
 
     def analyze(
         self,
@@ -68,7 +78,7 @@ class AnalysisAgent:
             evidence: str,
             trans_message: str,
     ) -> dict:
-        system_prompt, user_prompt = self._build_final_messages(
+        messages = self._build_final_messages(
             user_query=user_query,
             analysis_focus=analysis_focus,
             company_profile=company_profile,
@@ -76,7 +86,7 @@ class AnalysisAgent:
             evidence_json=evidence,
             trans_message=trans_message,
         )
-        analysis_result = self.llm_client.generate(system_prompt, user_prompt)
+        analysis_result = self.llm_client.generate(messages=messages)
         if not analysis_result:
             raise ValueError("LLM generate empty result.")
         return parse_json_response(analysis_result)
@@ -711,5 +721,14 @@ cross_statement_evidence_tool 可选 groups：
 5. 如果 evidence 中缺少关键数据，请写入 data_limitations。
 6. conclusion 必须直接回应用户问题。
 """
-        return system_prompt, user_prompt
+        return [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ]
 

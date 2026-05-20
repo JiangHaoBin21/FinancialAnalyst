@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from app.domain.models import PlanningResult, PlanningStep as SkillPlanningStep
-from app.skills.planning.planning_skill import PlanningSkill
+from app.skills.supervisor.planning_skill import PlanningSkill
+from app.skills.supervisor.review_skill import SupervisorReviewSkill
 from app.workflows.state import (
     OutputMode,
     PlanStep,
@@ -24,31 +25,59 @@ class SupervisorAgent:
     internal data parts; that belongs to DataAgent.
     """
 
-    def __init__(self, planning_skill: PlanningSkill):
+    def __init__(self, planning_skill: PlanningSkill, review_skill: SupervisorReviewSkill):
         self.planning_skill = planning_skill
+        self.review_skill = review_skill
 
     def run(self, state: WorkflowState) -> dict:
-        user_query = state.get("user_query")
-        if not user_query or not str(user_query).strip():
-            return self._empty_query_update()
+        if not state.get("task_plan"):
+            user_query = state.get("user_query")
+            if not user_query or not str(user_query).strip():
+                return self._empty_query_update()
 
-        try:
-            planning_result = self.planning_skill.plan_financial_task(user_query=user_query)
-        except Exception as exc:
-            return self._planning_exception_update(exc)
+            try:
+                planning_result = self.planning_skill.plan_financial_task(user_query=user_query)
+            except Exception as exc:
+                return self._planning_exception_update(exc)
 
-        update = self._planning_result_update(planning_result)
+            update = self._planning_result_update(planning_result)
 
-        if planning_result.needs_user_input:
-            update.update(
-                self._waiting_for_user_input_update(
-                    assistant_message=self._build_clarification_message(planning_result),
+            if planning_result.needs_user_input:
+                update.update(
+                    self._waiting_for_user_input_update(
+                        assistant_message=self._build_clarification_message(planning_result),
+                    )
                 )
-            )
+                return update
+
+            update.update(self._ready_for_execution_update(planning_result, update["task_plan"]))
             return update
 
-        update.update(self._ready_for_execution_update(planning_result, update["task_plan"]))
-        return update
+        else:
+            update = self.review_skill.review(
+                user_query=state["user_query"],
+                analysis_focus=state["analysis_focus"],
+                last_completed_stage=state["last_completed_stage"],
+                stage_outputs=state["stage_outputs"],
+                next_step=state["next_step"]
+            )
+            current_index = -1
+            agent_step_map = {
+                "DataAgent": WorkflowStep.DATA.value,
+                "AnalysisAgent": WorkflowStep.ANALYSIS.value,
+                "ReportAgent": WorkflowStep.REPORT.value,
+                "ReflectionAgent": WorkflowStep.REFLECTION.value,
+            }
+            if not update.get("review_passed"):
+                for index, item in enumerate(state["task_plan"]):
+                    # if agent_step_map.get(item["agent"]) == update["next_step"]:
+                    if item["agent"] == update["next_step"]:
+                        current_index = index
+                        break
+                update["current_step_index"] = current_index
+            update.pop("review_passed")
+            return update
+
 
     def _planning_result_update(self, planning_result: PlanningResult) -> dict:
         task_plan = [self._to_state_plan_step(step) for step in planning_result.task_plan]

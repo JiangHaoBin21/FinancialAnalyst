@@ -1,4 +1,4 @@
-# app/skills/planning/planning_skill.py
+# app/skills/supervisor/planning_skill.py
 
 """负责调用 planner 大模型，并串联 prompt builder、parser、policy。"""
 
@@ -7,9 +7,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.models import PlanningResult
-from app.skills.planning.planning_parser import parse_planning_result
-from app.skills.planning.planning_policy import finalize_planning_result
-from app.skills.planning.planning_prompt_builder import build_planning_prompt, build_system_prompt
+from app.skills.supervisor.planning_parser import parse_planning_result
+from app.skills.supervisor.planning_policy import finalize_planning_result
+from app.skills.supervisor.planning_prompt_builder import build_planning_prompt, build_system_prompt
 
 
 class PlanningSkill:
@@ -36,7 +36,11 @@ class PlanningSkill:
         调用大模型。
         约定 llm_client 提供 generate(user_prompt: str, system_prompt: str) -> str 接口。
         """
-        return self.llm_client.generate(user_prompt, system_prompt)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        return self.llm_client.generate(messages=messages)
 
     def generate_raw_plan(self, user_query: str) -> str:
         """

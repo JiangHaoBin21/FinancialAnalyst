@@ -1,4 +1,4 @@
-"""planning skill提示词构造"""
+"""supervisor skill提示词构造"""
 
 from datetime import datetime
 from typing import Any, Optional

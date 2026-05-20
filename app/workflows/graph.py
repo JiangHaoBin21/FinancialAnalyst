@@ -18,6 +18,7 @@ from app.skills.data.company_profile_fetch_skill import CompanyProfileFetchSkill
 from app.skills.data.completeness_check_skill import CompletenessCheckSkill
 from app.skills.data.data_preparation_skill import DataPreparationSkill
 from app.skills.data.required_parts_skill import RequiredPartsSkill
+from app.skills.supervisor.review_skill import SupervisorReviewSkill
 from app.workflows.nodes import WorkflowNodes
 from app.workflows.state import (
     WorkflowState,
@@ -208,29 +209,10 @@ class WorkflowGraph:
             self._route_path_map(END),
         )
 
-        builder.add_conditional_edges(
-            "data_stage",
-            self._route_after_node,
-            self._route_path_map(END),
-        )
-
-        builder.add_conditional_edges(
-            "analysis",
-            self._route_after_node,
-            self._route_path_map(END),
-        )
-
-        builder.add_conditional_edges(
-            "report",
-            self._route_after_node,
-            self._route_path_map(END),
-        )
-
-        builder.add_conditional_edges(
-            "reflection",
-            self._route_after_node,
-            self._route_path_map(END),
-        )
+        builder.add_edge("data_stage", "supervisor")
+        builder.add_edge("analysis", "supervisor")
+        builder.add_edge("report", "supervisor")
+        builder.add_edge("reflection", "supervisor")
 
         builder.add_edge("await_user_input", END)
         builder.add_edge("finished", END)
@@ -390,7 +372,7 @@ def build_workflow_graph(
         from app.llms.openai_client import OpenAIClient
         from app.repositories.company_repo import CompanyRepository
         from app.services.tushare_service import TushareServiceConfig
-        from app.skills.planning.planning_skill import PlanningSkill
+        from app.skills.supervisor.planning_skill import PlanningSkill
 
         llm_client = llm_client or OpenAIClient()
 
@@ -399,10 +381,11 @@ def build_workflow_graph(
         # =========================
         if nodes is None:
             planning_skill = PlanningSkill(llm_client=llm_client)
+            review_skill = SupervisorReviewSkill(llm_client=llm_client)
 
             nodes = WorkflowNodes(
-                supervisor_agent=SupervisorAgent(planning_skill=planning_skill),
-                analysis_agent=AnalysisAgent(),
+                supervisor_agent=SupervisorAgent(planning_skill=planning_skill, review_skill=review_skill),
+                analysis_agent=AnalysisAgent(llm_client=llm_client),
                 report_agent=ReportAgent(),
                 reflection_agent=ReflectionAgent(),
             )

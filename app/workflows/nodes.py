@@ -84,10 +84,6 @@ class WorkflowNodes:
             ],
         }
 
-
-
-
-
     def analysis_node(self, state: WorkflowState) -> dict:
         """执行分析阶段的计划步骤。"""
         return self._execute_agent_plan_step(
@@ -176,15 +172,25 @@ class WorkflowNodes:
     # =========================
 
     def _execute_agent_plan_step(
-        self,
-        state: WorkflowState,
-        node_step: WorkflowStep,
-        expected_agent: str,
-        agent: Any,
-        success_status: WorkflowStatus,
-        default_success_message: str,
+            self,
+            state: WorkflowState,
+            node_step: WorkflowStep,
+            expected_agent: str,
+            agent: Any,
+            success_status: WorkflowStatus,
+            default_success_message: str,
     ) -> dict:
-        """执行一个受计划约束的 Agent 步骤，并统一处理跳转和错误。"""
+        """
+        执行一个受计划约束的 Agent 阶段。
+
+        设计约定：
+        1. 普通 Agent 只负责产出业务结果，不负责决定流程跳转；
+        2. 当前阶段正常完成后，complete_current_plan_step 会推进计划索引，
+           并把 next_step 设置为“计划推荐的下一阶段”；
+        3. 当前节点结束后，Graph 通过普通边固定回到 Supervisor；
+        4. Supervisor 审查通过则沿用 state["next_step"]，审查不通过则覆盖 next_step。
+        """
+
         if agent is None:
             return self._node_error(
                 state=state,
@@ -201,67 +207,50 @@ class WorkflowNodes:
                 message=f"Current plan step does not match {expected_agent}.",
             )
 
+        # 当前计划步骤开始执行：先标记为 RUNNING
         running_update = {
-            "task_plan": update_current_plan_step_status(state, PlanStepStatus.RUNNING),
+            "task_plan": update_current_plan_step_status(
+                state,
+                PlanStepStatus.RUNNING,
+            ),
         }
         state_for_agent = {**state, **running_update}
 
         try:
+            # 普通 Agent 只产出业务更新，不负责返回 next_step
             agent_update = agent.run(state_for_agent)
         except Exception as exc:
             return self._node_error(
-                state=state,
+                state=state_for_agent,
                 node_step=node_step,
                 agent_name=expected_agent,
                 message=f"{expected_agent} failed: {type(exc).__name__}: {exc}",
             )
 
         merged = {**state_for_agent, **agent_update}
-        # Agent 可以主动请求补充信息，此时工作流暂停到等待用户输入节点。
-        if merged.get("next_step") == WorkflowStep.AWAIT_USER_INPUT.value:
-            return {
-                **agent_update,
-                "status": WorkflowStatus.NEEDS_USER_INPUT.value,
-                "current_stage": node_step.value,
-                "execution_history": [
-                    execution_record(
-                        step=node_step.value,
-                        agent=expected_agent,
-                        success=True,
-                        message=merged.get("assistant_message") or "Needs user input.",
-                        metadata={"interrupted_to": WorkflowStep.AWAIT_USER_INPUT.value},
-                    )
-                ],
-            }
 
-        # Agent 可以要求回到 Supervisor 重新规划后续步骤。
-        if merged.get("next_step") == WorkflowStep.SUPERVISOR.value:
-            return {
-                **agent_update,
-                "status": WorkflowStatus.READY_FOR_EXECUTION.value,
-                "current_stage": node_step.value,
-                "execution_history": [
-                    execution_record(
-                        step=node_step.value,
-                        agent=expected_agent,
-                        success=True,
-                        message=merged.get("assistant_message") or "Replanning requested.",
-                        metadata={"interrupted_to": WorkflowStep.SUPERVISOR.value},
-                    )
-                ],
-            }
+        # 普通 Agent 不通过 next_step 控制流程；
+        # 这里只保留 has_error 作为业务失败信号。
+        if merged.get("has_error"):
+            error_message = (
+                    merged.get("error_message")
+                    or merged.get("assistant_message")
+                    or f"{expected_agent} failed."
+            )
 
-        # 错误状态会标记当前计划步骤失败，并交给错误节点收尾。
-        if merged.get("next_step") == WorkflowStep.ERROR.value or merged.get("has_error"):
             update = {
-                **agent_update,
-                **fail_current_plan_step(state),
+                "stage_outputs": agent_update,
+                **fail_current_plan_step(state_for_agent),
                 "status": WorkflowStatus.ERROR.value,
-                "current_stage": WorkflowStep.ERROR.value,
+                "current_stage": node_step.value,
                 "next_step": WorkflowStep.ERROR.value,
                 "has_error": True,
-                "error_message": merged.get("error_message") or f"{expected_agent} failed.",
+                "error_message": error_message,
+                "assistant_message": error_message,
+                "last_completed_stage": None,
+                "needs_supervisor_review": False,
             }
+
             return {
                 **update,
                 "execution_history": [
@@ -269,20 +258,44 @@ class WorkflowNodes:
                         step=node_step.value,
                         agent=expected_agent,
                         success=False,
-                        message=update["error_message"],
+                        message=error_message,
                     )
                 ],
             }
 
-        # 正常完成时推进计划索引，并把 next_step 指向下一类节点。
+        # 正常完成：
+        # 1. 标记当前 plan step 完成；
+        # 2. 推进 current_step_index；
+        # 3. 让 complete_current_plan_step 计算计划推荐的 next_step。
         plan_update = complete_current_plan_step(state_for_agent)
+        planned_next_step = _enum_value(plan_update.get("next_step"))
+
         message = agent_update.get("assistant_message") or default_success_message
+        additional = {}
+        if node_step.value == "analysis":
+            additional = {
+                "analysis_result": agent_update
+            }
+        elif node_step.value == "report":
+            additional = {
+                "report_draft": agent_update
+            }
+        elif node_step.value == "reflection":
+            additional = {
+                "reflection_result": agent_update
+            }
+
         return {
-            **agent_update,
             **plan_update,
+            **additional,
+            "stage_outputs": agent_update,
             "current_stage": node_step.value,
             "status": success_status.value,
             "assistant_message": message,
+
+            # 标记：当前大阶段已完成，接下来需要 Supervisor 审查
+            "last_completed_stage": node_step.value,
+
             "execution_history": [
                 execution_record(
                     step=node_step.value,
@@ -291,7 +304,11 @@ class WorkflowNodes:
                     message=message,
                     metadata={
                         "current_step_index": plan_update.get("current_step_index"),
-                        "next_step": _enum_value(plan_update.get("next_step")),
+                        "next_step": planned_next_step,
+                        "needs_supervisor_review": True,
+                        "next_step_semantics": (
+                            "plan_suggested_next_step; actual routing is reviewed by Supervisor"
+                        ),
                     },
                 )
             ],

@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 from app.llms.openai_client import OpenAIClient
-from app.skills.planning.planning_skill import PlanningSkill
+from app.skills.supervisor.planning_skill import PlanningSkill
 
 
 def main() -> None:

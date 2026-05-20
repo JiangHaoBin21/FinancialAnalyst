@@ -4,7 +4,7 @@ from app.agents.reflection_agent import ReflectionAgent
 from app.agents.report_agent import ReportAgent
 from app.agents.supervisor_agent import SupervisorAgent
 from app.llms.openai_client import OpenAIClient
-from app.skills.planning.planning_skill import PlanningSkill
+from app.skills.supervisor.planning_skill import PlanningSkill
 from app.workflows.graph import WorkflowGraph
 from app.workflows.nodes import WorkflowNodes
 
