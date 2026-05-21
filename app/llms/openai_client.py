@@ -28,7 +28,7 @@ class OpenAIClientConfig:
     api_key: str = settings.deepseek_api_key
     model: str = settings.deepseek_model_name
     base_url: Optional[str] = getattr(settings, "deepseek_base_url", None)
-    timeout: float = getattr(settings, "DEEPSEEK_TIMEOUT", 60.0)
+    timeout: float = getattr(settings, "DEEPSEEK_TIMEOUT", 180.0)
 
 
 class OpenAIClient(BaseLLMClient):
@@ -121,7 +121,7 @@ class OpenAIClient(BaseLLMClient):
                 model=self.model,
                 messages=messages,
                 tools=tools,
-                tools_choice="auto",
+                tool_choice="auto",
                 extra_body={"thinking": {"type": "enabled"}},
                 **kwargs,
             )

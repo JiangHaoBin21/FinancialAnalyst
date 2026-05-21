@@ -126,8 +126,14 @@ class WorkflowState(TypedDict, total=False):
     trans_message: Optional[str]
     # 给人看的消息
     assistant_message: Optional[str]
+    # 上一次完成阶段（用于supervisor审查和重定向）
     last_completed_stage: str | None
+    # 上一阶段输出
     stage_outputs: dict | None
+    # 每个大阶段最大进入次数
+    max_stage_attempts: int
+    # 记录每个大阶段已经执行的次数
+    stage_attempt_counts: dict[str, int]
 
     # 可观测性
     execution_history: Annotated[list[ExecutionRecord], append_list]
@@ -196,6 +202,8 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "trans_message": None,
         "last_completed_stage": None,
         "stage_outputs": None,
+        "max_stage_attempts": 3,
+        "stage_attempt_counts": {},
         "execution_history": [],
         "final_response": None,
     }
@@ -399,3 +407,64 @@ def time_range_to_state(value: TimeRange | dict[str, Any] | None) -> TimeRangeSt
         "end_year": int(value.end_year),
         "end_month": int(value.end_month),
     }
+
+DEFAULT_MAX_STAGE_ATTEMPTS = 2
+
+
+def mark_stage_attempt(
+    state: WorkflowState,
+    stage: WorkflowStep,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """
+    记录某个大阶段被进入的次数。
+
+    返回：
+    - attempt_update：正常情况下要写回 state 的更新
+    - exceeded_update：如果超过最大次数，返回错误更新；否则为 None
+    """
+    stage_value = stage.value
+
+    counts = dict(state.get("stage_attempt_counts") or {})
+    attempts = counts.get(stage_value, 0) + 1
+    counts[stage_value] = attempts
+
+    max_attempts = int(
+        state.get("max_stage_attempts") or DEFAULT_MAX_STAGE_ATTEMPTS
+    )
+
+    attempt_update = {
+        "stage_attempt_counts": counts,
+    }
+
+    if attempts > max_attempts:
+        message = (
+            f"""{stage_value} 阶段已经达到了最大执行次数:({max_attempts}). 为避免无限循环，工作流已进入错误状态。"""
+        )
+
+        exceeded_update = {
+            **attempt_update,
+            "current_stage": WorkflowStep.ERROR.value,
+            "status": WorkflowStatus.ERROR.value,
+            "target_step": WorkflowStep.ERROR.value,
+            "has_error": True,
+            "error_message": message,
+            "assistant_message": message,
+            "needs_supervisor_review": False,
+            "execution_history": [
+                execution_record(
+                    step=stage_value,
+                    agent="System",
+                    success=False,
+                    message=message,
+                    metadata={
+                        "stage": stage_value,
+                        "attempts": attempts,
+                        "max_attempts": max_attempts,
+                    },
+                )
+            ],
+        }
+
+        return attempt_update, exceeded_update
+
+    return attempt_update, None

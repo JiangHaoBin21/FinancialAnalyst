@@ -71,7 +71,6 @@ DEFAULT_QUERY = (
     "偿债能力、现金流质量和关键财务指标，不要生成报告。"
 )
 
-MAX_ANALYSIS_PREVIEW_LENGTH = 3000
 MAX_STAGE_OUTPUT_PREVIEW_LENGTH = 3000
 
 FINANCIAL_PARTS = [
@@ -114,6 +113,46 @@ VALID_ANALYSIS_STATUSES = {
 }
 NON_FAILED_ANALYSIS_STATUSES = VALID_ANALYSIS_STATUSES - {"analysis_failed"}
 PLACEHOLDER_AGENT_NAMES = {"ReportAgent", "ReflectionAgent"}
+
+
+class ReActToolCallLoggingLLMClient:
+    """测试脚本用的 LLM 代理：只打印 Analysis ReAct 阶段的 tool_calls。"""
+
+    def __init__(self, wrapped_client: OpenAIClient):
+        self.wrapped_client = wrapped_client
+        self._react_round = 0
+
+    def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        result = self.wrapped_client.generate(
+            messages=messages,
+            tools=tools,
+            **kwargs,
+        )
+
+        if tools:
+            if not any(
+                message.get("role") in {"assistant", "tool"}
+                for message in messages
+            ):
+                self._react_round = 0
+            self._react_round += 1
+            print_analysis_react_tool_calls(
+                round_number=self._react_round,
+                assistant_message=result,
+            )
+
+        return result
+
+    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
+        return self.wrapped_client.chat(messages=messages, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.wrapped_client, name)
 
 
 class ChineseArgumentParser(argparse.ArgumentParser):
@@ -183,7 +222,9 @@ def build_real_nodes() -> tuple[WorkflowNodes, DataSubgraphNodes]:
             planning_skill=planning_skill,
             review_skill=review_skill,
         ),
-        analysis_agent=AnalysisAgent(llm_client=llm_client),
+        analysis_agent=AnalysisAgent(
+            llm_client=ReActToolCallLoggingLLMClient(llm_client),
+        ),
         report_agent=ReportAgent(),
         reflection_agent=ReflectionAgent(),
     )
@@ -231,9 +272,11 @@ def assert_real_dependencies(
         isinstance(supervisor.review_skill.llm_client, OpenAIClient),
         "Supervisor 审查 skill 未使用 OpenAIClient。",
     )
+    analysis_llm_client = nodes.analysis_agent.llm_client
     require(
-        isinstance(nodes.analysis_agent.llm_client, OpenAIClient),
-        "AnalysisAgent 未使用 OpenAIClient。",
+        isinstance(analysis_llm_client, ReActToolCallLoggingLLMClient)
+        and isinstance(analysis_llm_client.wrapped_client, OpenAIClient),
+        "AnalysisAgent 未通过 OpenAIClient 执行 ReAct tool_calls 观测。",
     )
     require(
         isinstance(data_agent.required_parts_skill.llm_client, OpenAIClient),
@@ -263,8 +306,9 @@ def assert_real_dependencies(
         "CompanyResolver 未使用 TushareService。",
     )
 
-    print("未注入 mock/fake/stub 依赖。")
+    print("未注入 mock/fake/stub 依赖；Analysis LLM 仅包了一层打印代理。")
     print("LLM 客户端: OpenAIClient")
+    print("Analysis ReAct 观测: 打印每轮大模型返回的 tool_calls")
     print("数据库会话工厂: SessionLocal")
     print("行情/财务数据服务: TushareService")
 
@@ -414,6 +458,56 @@ def print_stage_output_after_node(
         print_analysis_stage_output(merged_state, full_results=full_results)
 
 
+def print_analysis_react_tool_calls(
+    *,
+    round_number: int,
+    assistant_message: Any,
+) -> None:
+    tool_calls = getattr(assistant_message, "tool_calls", None) or []
+    payload = {
+        "轮次": round_number,
+        "tool_calls数量": len(tool_calls),
+        "tool_calls": [
+            serialize_tool_call_for_print(tool_call)
+            for tool_call in tool_calls
+        ],
+    }
+    if not tool_calls:
+        payload["说明"] = "本轮模型未返回 tool_calls，ReAct 证据收集结束。"
+
+    print_stage_payload(
+        "Analysis ReAct 模型返回 tool_calls",
+        payload,
+        full_results=True,
+    )
+
+
+def serialize_tool_call_for_print(tool_call: Any) -> dict[str, Any]:
+    function = getattr(tool_call, "function", None)
+    raw_arguments = getattr(function, "arguments", None)
+    parsed_arguments = parse_tool_arguments_for_print(raw_arguments)
+
+    return {
+        "id": getattr(tool_call, "id", None),
+        "type": getattr(tool_call, "type", None),
+        "function": {
+            "name": getattr(function, "name", None),
+            "arguments": parsed_arguments,
+            "raw_arguments": raw_arguments,
+        },
+    }
+
+
+def parse_tool_arguments_for_print(raw_arguments: Any) -> Any:
+    if not isinstance(raw_arguments, str) or not raw_arguments.strip():
+        return raw_arguments
+
+    try:
+        return json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        return raw_arguments
+
+
 def print_supervisor_stage_output(
     state: WorkflowState,
     update: dict[str, Any],
@@ -460,6 +554,7 @@ def print_data_stage_output(
         "财务数据摘要": summarize_financial_data(
             state.get("financial_data") or {}
         ),
+        "财务数据": state.get("financial_data"),
         "数据完整性检查结果": state.get("data_completeness_check_result"),
         "是否需要回填": state.get("need_backfill"),
         "已回填次数": state.get("already_backfill"),
@@ -665,9 +760,7 @@ def assert_analysis_stage_outputs(state: WorkflowState) -> None:
 
     preview = normalize_for_json(analysis_result)
     preview_text = json.dumps(preview, ensure_ascii=False, indent=2, default=str)
-    if len(preview_text) > MAX_ANALYSIS_PREVIEW_LENGTH:
-        preview_text = preview_text[:MAX_ANALYSIS_PREVIEW_LENGTH] + "...（已截断）"
-    print("analysis_result 预览:")
+    print("analysis_result 完整内容:")
     print(preview_text)
 
 

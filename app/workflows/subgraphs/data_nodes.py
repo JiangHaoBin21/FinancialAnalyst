@@ -27,7 +27,7 @@ from app.workflows.state import (
     fail_current_plan_step,
     is_current_plan_agent,
     make_json_safe,
-    update_current_plan_step_status,
+    update_current_plan_step_status, mark_stage_attempt,
 )
 
 
@@ -76,6 +76,14 @@ class DataSubgraphNodes:
                 message="Current plan step does not match DataAgent.",
             )
 
+        attempt_update, exceeded_update = mark_stage_attempt(
+            state=state,
+            stage=WorkflowStep.DATA,
+        )
+
+        if exceeded_update is not None:
+            return exceeded_update
+
         try:
             update = self.data_agent.run(state)
         except Exception as exc:
@@ -91,6 +99,7 @@ class DataSubgraphNodes:
 
         return {
             **update,
+            **attempt_update,
             "current_stage": WorkflowStep.DATA.value,
             "status": WorkflowStatus.DATA_PLANNED.value,
             "task_plan": update_current_plan_step_status(state, PlanStepStatus.RUNNING),
@@ -249,10 +258,12 @@ class DataSubgraphNodes:
 
         financial_data = defaultdict(list)
         for result in results:
-            financial_data[result["part_name"]].append(result["payload"])
+            financial_data[result["part_name"]].extend(result["payload"])
 
+            print("*" * 100)
+            print(type(result["payload"]))
         return {
-            "financial_data": dict(financial_data),
+            "financial_data": financial_data,
             "execution_history": [
                 execution_record(
                     step=WorkflowStep.DATA.value,
@@ -392,6 +403,11 @@ class DataSubgraphNodes:
             **plan_update,
             "current_stage": WorkflowStep.DATA.value,
             "status": WorkflowStatus.DATA_READY.value,
+            "last_completed_stage": WorkflowStep.DATA.value,
+            "stage_outputs": {
+                "company_profile": state.get("company_profile"),
+                "financial_data": state.get("financial_data"),
+            },
             "execution_history": [
                 execution_record(
                     step=WorkflowStep.DATA.value,

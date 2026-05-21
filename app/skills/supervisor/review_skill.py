@@ -102,6 +102,40 @@ target_step = planned_next_step
 - "await_user_input"
 - "error"
 
+
+路由决策优先级规则：
+
+1. 如果问题是数据不足、关键财务表缺失、期间缺失、字段缺失、需要补拉数据，
+   并且这些问题理论上可以通过 DataAgent 重新准备或补拉解决，
+   target_step 必须设置为 "data"，不要设置为 "error"。
+
+2. 如果问题是用户输入不足，例如公司不明确、时间范围不明确、分析口径不明确，
+   target_step 必须设置为 "await_user_input"，不要设置为 "error"。
+
+3. 如果问题是 analysis_result 结构缺失、分析结果无法支撑报告生成，
+   target_step 应设置为 "analysis"。
+
+4. 如果问题是 report_result 缺失、报告为空、报告结构明显不完整，
+   target_step 应设置为 "report"。
+
+5. 如果 ReflectionAgent 指出最终报告问题，应根据问题来源路由：
+   - 数据问题：target_step = "data"
+   - 分析问题：target_step = "analysis"
+   - 报告问题：target_step = "report"
+   - 用户输入问题：target_step = "await_user_input"
+
+6. 只有以下情况才允许 target_step = "error"：
+   - last_completed_stage 无法识别；
+   - stage_outputs 中完全找不到刚完成阶段的产物；
+   - 阶段产物不是合法结构，无法解析；
+   - 出现系统级异常、工具异常、代码异常；
+   - 已经达到最大重试次数；
+   - 没有任何可恢复路径。
+
+重要：数据不足、数据缺失、需要补拉数据，默认都不是 error。
+只要可以通过重新进入 data 阶段修复，就必须 target_step = "data"。
+
+
 不同阶段的审查边界如下：
 
 一、当 last_completed_stage 表示 data 阶段时：
@@ -110,7 +144,7 @@ target_step = planned_next_step
 1. 是否有明确公司信息；
 2. 是否有明确时间范围；
 3. 是否准备了 analysis_focus 所需的核心财务数据；
-4. 是否存在明显阻断分析的关键数据缺失；
+4. 是否存在关键财务表缺失、关键期间缺失或字段缺失；
 5. 是否需要用户补充公司、时间范围或分析口径。
 
 你不要做财务分析，只判断数据是否足够进入 analysis。
@@ -191,7 +225,11 @@ target_step = planned_next_step
 2. 不要编造 stage_outputs 中不存在的内容；
 3. 不要因为“内容还可以优化”就阻断流程；
 4. 只有当问题会阻断下一阶段执行时，才将 review_passed 设为 false；
-5. 如果无法识别 last_completed_stage 或缺少对应阶段产物，应将 target_step 设置为 "error"。
+5. 如果无法识别 last_completed_stage，或 last_completed_stage 不属于 data、analysis、report、reflection 之一，应将 target_step 设置为 "error"。
+6. 如果能够识别 last_completed_stage，但 stage_outputs 中缺少该阶段产物，或该阶段产物为空、结构不完整、无法满足下游最低输入要求，不要直接设置为 "error"。
+   这类问题应视为“刚完成阶段没有产出有效结果”，target_step 应设置为 last_completed_stage 对应的阶段，让该阶段重新执行。
+7. 只有出现系统级不可恢复问题时，才允许 target_step = "error"。
+   例如：last_completed_stage 无法识别、阶段名称非法、stage_outputs 整体无法解析、工具/代码异常、没有任何可恢复路径。
 """
         user_prompt = f"""
 请对刚完成的阶段进行流程层审查，并决定工作流下一步 target_step。

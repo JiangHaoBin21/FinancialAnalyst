@@ -14,7 +14,7 @@ from app.workflows.state import (
     execution_record,
     fail_current_plan_step,
     is_current_plan_agent,
-    update_current_plan_step_status,
+    update_current_plan_step_status, mark_stage_attempt,
 )
 
 
@@ -148,8 +148,8 @@ class WorkflowNodes:
 
     def error_node(self, state: WorkflowState) -> dict:
         """生成工作流错误状态。"""
-        message = state.get("assistant_message") or state.get("error_message") or (
-            "Workflow execution failed."
+        message = state.get("error_message") or (
+            "工作流执行出错."
         )
         return {
             "current_stage": WorkflowStep.ERROR.value,
@@ -207,8 +207,17 @@ class WorkflowNodes:
                 message=f"Current plan step does not match {expected_agent}.",
             )
 
+        attempt_update, exceeded_update = mark_stage_attempt(
+            state=state,
+            stage=node_step,
+        )
+
+        if exceeded_update is not None:
+            return exceeded_update
+
         # 当前计划步骤开始执行：先标记为 RUNNING
         running_update = {
+            **attempt_update,
             "task_plan": update_current_plan_step_status(
                 state,
                 PlanStepStatus.RUNNING,
@@ -247,7 +256,7 @@ class WorkflowNodes:
                 "has_error": True,
                 "error_message": error_message,
                 "assistant_message": error_message,
-                "last_completed_stage": None,
+                "last_completed_stage": node_step.value,
                 "needs_supervisor_review": False,
             }
 

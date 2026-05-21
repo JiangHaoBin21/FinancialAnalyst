@@ -70,11 +70,13 @@ class SupervisorAgent:
             }
             if not update.get("review_passed"):
                 for index, item in enumerate(state["task_plan"]):
-                    # if agent_step_map.get(item["agent"]) == update["next_step"]:
-                    if item["agent"] == update["next_step"]:
+                    if agent_step_map.get(item["agent"]) == update["next_step"]:
+                    # if item["agent"] == update["next_step"]:
                         current_index = index
                         break
                 update["current_step_index"] = current_index
+            if update.get("next_step") == WorkflowStep.DATA.value:
+                update["data_summary"] = None
             update.pop("review_passed")
             return update
 

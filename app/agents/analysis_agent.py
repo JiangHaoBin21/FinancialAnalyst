@@ -62,10 +62,11 @@ class AnalysisAgent:
         return {
             "status": analysis_dict["status"],
             "summary": analysis_dict["summary"],
+            "overall_score": analysis_dict["overall_score"],
             "dimensions": analysis_dict["dimensions"],
             "data_limitations": analysis_dict["data_limitations"],
             "evidence": evidence_json,
-            "conclusion": analysis_dict["conclusion"],
+            "conclusion": analysis_dict["final_conclusion"],
         }
 
     def _finalize_analysis(
@@ -463,9 +464,26 @@ class AnalysisAgent:
 - 不能编造财务指标、财务数据或趋势判断。
 - 涉及具体指标、金额、比率、趋势或风险判断时，应优先通过工具获取证据。
 - 如果工具返回的数据不足、缺失或失败，不能强行得出确定结论，应在后续分析中体现数据限制。
-- 不要因为工具可用就机械调用所有工具，应根据用户问题选择最相关的工具和 group。
 - 一次可以调用一个或多个工具；如果多个维度都明显相关，可以并行请求多个 tool_calls。
 - 如果已有证据足以回答当前问题，应停止调用工具，不要重复调用相近 group。
+
+你不是为了少调用工具而少调用工具，而是为了获得足够支撑用户问题的关键证据。
+
+当用户问题明确包含多个分析维度时，你必须逐一覆盖这些维度。
+每个被用户明确点名的维度，至少需要 1 个直接证据来源；如果该维度涉及判断质量、原因或风险，通常还需要 1 个辅助证据来源进行解释或交叉验证。
+
+你需要在内部完成一个 evidence coverage checklist：
+1. 用户明确要求了哪些分析维度？
+2. 每个维度是否已经有直接证据？
+3. 是否存在只用结果指标、缺少底层报表解释的情况？
+4. 是否存在只用单表金额、缺少比率或跨表验证的情况？
+5. 如果某个明确维度还没有证据覆盖，不得结束 ReAct 阶段，必须继续调用工具补充。
+
+注意：
+- 不要机械调用所有工具；
+- 但也不要只调用一个综合指标工具就覆盖所有问题；
+- 对于用户明确点名的维度，宁可多补一个关键 group，也不要让后续 final 阶段缺证据。
+
 
 【任务边界】
 - 你是 AnalysisAgent，不是 ReportAgent。当前阶段不需要生成完整自然语言报告。
@@ -483,6 +501,63 @@ class AnalysisAgent:
 - fina_indicator_evidence_tool：用于 TuShare 已计算好的标准财务指标，适合利润率、费用率、ROE、ROA、ROIC、周转率、偿债指标、每股指标、扣非指标等快速分析。
 - cross_statement_evidence_tool：用于跨报表诊断，适合收入质量、利润质量、现金转化质量、偿债压力、资本开支压力、营运资本压力等综合判断。
 
+
+【证据覆盖与 group 选择规则】
+
+你的目标不是调用最多工具，而是用少量高价值 evidence 覆盖用户明确要求的分析维度。
+停止调用工具前，必须确认：用户明确点名的主要维度都已有证据支撑，且没有明显遗漏的关键维度。
+
+一、按用户问题确定证据覆盖
+
+1. 如果用户要求“盈利能力”：
+   - 至少需要 fina_indicator_evidence_tool 的 profitability_margin 或 return_efficiency；
+   - 如需解释收入、利润规模或利润变化，应补充 income_statement_evidence_tool 的 profit_scale_layers；
+   - 对宽口径财务分析，income_statement_evidence_tool 通常不要只选 1 个 group，可选择 profit_scale_layers + cost_expense_amounts，必要时补充 profit_attribution、non_core_profit_sources 或 impairment_losses。
+
+2. 如果用户要求“偿债能力”或“债务压力”：
+   - 不要只依赖 fina_indicator_evidence_tool；
+   - 至少需要 fina_indicator_evidence_tool 的 liquidity_solvency；
+   - 还应调用 balance_sheet_evidence_tool，通常选择 asset_scale_structure + debt_maturity_structure；
+   - 如需判断现金流覆盖债务，再补充 cross_statement_evidence_tool 的 debt_service_pressure。
+
+3. 如果用户要求“现金流质量”：
+   - 至少需要 cashflow_statement_evidence_tool 的 operating_cash_net；
+   - 对宽口径财务分析，cashflow_statement_evidence_tool 通常不要只选 1 个 group，可选择 operating_cash_net + indirect_operating_reconciliation；
+   - 如需判断利润现金转化，应补充 cross_statement_evidence_tool 的 cash_conversion_quality 或 profit_quality；
+   - 如涉及资本开支、扩产或融资压力，再补充 investing_capex_structure 或 financing_cashflow_structure。
+
+4. 如果用户要求“关键财务指标”：
+   - 通常需要 fina_indicator_evidence_tool；
+   - 可根据问题选择 profitability_margin、return_efficiency、liquidity_solvency、per_share_value、turnover_efficiency；
+   - 如果关键指标出现异常，应补充底层报表工具解释原因。
+
+5. 如果用户要求“整体财务表现”“财务健康”“综合分析”或同时列出多个维度：
+   - 通常应覆盖 income、balance、cashflow、fina_indicator 四类证据；
+   - 如涉及质量判断、风险判断或财务健康判断，再补充 cross_statement；
+   - 对基础报表工具，通常选择 2-3 个互补 group，而不是每个工具象征性只选 1 个 group；
+   - 互补 group 指分别提供规模、结构、质量、原因或风险证据，而不是重复同一类指标。
+
+二、避免冗余
+
+- 不要机械调用所有工具或所有 group；
+- 不要重复调用含义相近的 group；
+- “少量高价值 group”不是指每个工具只选 1 个 group；
+- 对宽口径问题，通常每个核心基础报表工具选择 2-3 个互补 group；
+- 如果用户问题很窄，只聚焦单一维度，可以减少工具和 group 数量。
+
+三、不得停止工具调用的情况
+
+如果用户明确要求的某个维度还没有直接证据，不得停止 ReAct。
+例如：
+- 要求偿债能力，但尚未调用 balance_sheet_evidence_tool；
+- 要求现金流质量，但尚未调用 cashflow_statement_evidence_tool；
+- 要求盈利能力，但尚未获得盈利指标或利润表证据；
+- 要求关键财务指标，但尚未调用 fina_indicator_evidence_tool；
+- 要求综合财务表现，但证据只来自单一工具或单一报表。
+
+如果相关工具已经尝试调用，但返回失败、空结果或无有效指标，可以停止继续重复调用；但该失败或空结果必须被保留在 evidence 中，供 final 阶段识别 data_limitations。
+
+
 【常见问题与工具优先级】
 - 如果用户问盈利能力、利润率、ROE、ROA：优先调用 fina_indicator_evidence_tool；如需解释金额变化，再调用 income_statement_evidence_tool。
 - 如果用户问收入和利润规模变化：优先调用 income_statement_evidence_tool 的 profit_scale_layers。
@@ -494,7 +569,17 @@ class AnalysisAgent:
 - 如果用户问偿债能力、债务压力：优先调用 fina_indicator_evidence_tool 的 liquidity_solvency 和 balance_sheet_evidence_tool 的 debt_maturity_structure；如需判断现金流覆盖债务，调用 cross_statement_evidence_tool 的 debt_service_pressure。
 - 如果用户问资产质量：优先调用 balance_sheet_evidence_tool 的 receivables_inventory、soft_asset_risk、construction_asset_risk；如涉及减值对利润影响，结合 income_statement_evidence_tool 的 impairment_losses。
 - 如果用户问扩产、资本开支、在建工程压力：优先调用 balance_sheet_evidence_tool 的 construction_asset_risk 和 cashflow_statement_evidence_tool 的 investing_capex_structure；如需综合判断扩张压力，调用 cross_statement_evidence_tool 的 capex_expansion_pressure。
-- 如果用户问整体财务质量、有没有风险、股票能买吗：通常需要组合调用 fina_indicator_evidence_tool、cashflow_statement_evidence_tool 和 cross_statement_evidence_tool，必要时补充 income 或 balance_sheet 工具解释原因。
+- 如果用户问整体财务质量、财务表现、财务健康、有没有风险、股票能买吗、是否值得关注：
+  通常需要覆盖盈利、偿债、现金流、效率或成长质量等多个维度。
+  不要只调用 fina_indicator_evidence_tool。
+  通常应调用：
+  1. fina_indicator_evidence_tool：获取利润率、ROE、偿债、周转、每股等标准指标；
+  2. income_statement_evidence_tool：解释收入、利润、成本费用或利润来源；
+  3. balance_sheet_evidence_tool：解释资产结构、债务结构、营运占款或偿债压力；
+  4. cashflow_statement_evidence_tool：解释经营现金流、投资现金流或筹资现金流；
+  5. cross_statement_evidence_tool：在需要判断利润质量、现金转化、收入质量、偿债压力时使用。
+  如果用户问题只聚焦其中一个维度，可以减少工具调用；如果用户明确要求多个维度，应逐一覆盖。
+
 
 【group 选择指南】
 
@@ -543,9 +628,29 @@ cross_statement_evidence_tool 可选 groups：
 - working_capital_pressure：净经营营运资本、收入、销售收现、应收存货和应付变化对现金流的影响。
 
 【停止调用工具的条件】
-当你已经获得足够证据覆盖用户问题的主要维度时，应停止调用工具。
-如果工具返回失败、缺数据或无法支持某些分析，也可以停止调用工具，后续 final 阶段会在 data_limitations 中说明。
-不要为了追求完整性而调用所有工具。
+你只能在满足以下条件时停止调用工具：
+
+1. 用户明确要求的主要分析维度已经被证据覆盖；
+2. 每个明确维度至少有一个直接相关的 tool result；
+3. 对于需要解释原因或质量判断的维度，已经有底层报表或跨表证据辅助判断；
+4. 没有明显遗漏的关键维度；
+5. 继续调用工具只会产生重复或低价值证据。
+
+如果工具返回失败、缺数据或无法支持某些分析，可以停止调用工具，但必须满足：
+1. 已经尝试调用该维度最相关的工具；
+2. 如果某个维度的工具调用失败、返回空结果或证据不足，你必须确保该问题被记录在 evidence 中，以便 final 阶段根据 evidence 写入 data_limitations。
+
+【避免冗余调用】
+你应该补齐关键证据，而不是追求工具数量。
+不要重复调用已经覆盖同一指标含义的 group。
+例如：
+- 如果已经调用 profitability_margin，不需要再调用多个只重复利润率含义的 group；
+- 如果偿债能力已经同时有 liquidity_solvency 和 debt_maturity_structure，除非需要现金流覆盖债务，否则不必继续调用 debt_service_pressure；
+- 如果现金流质量已经有 operating_cash_net 和 cash_conversion_quality，除非问题涉及资本开支或融资，不必额外调用所有 cashflow groups；
+- 如果用户只要求 summary，不需要为了细节完整而调用所有 group。
+
+优先选择“少量高价值 group”，而不是全量 group。
+
         """
         user_prompt = f"""
 请基于以下任务信息进行财务分析证据收集。
@@ -645,14 +750,32 @@ cross_statement_evidence_tool 可选 groups：
 - needs_more_data：当前 evidence 无法回答用户核心问题，需要 DataAgent 补充关键数据。
 - analysis_failed：工具结果整体不可用，或者无法形成有效分析。
 
+【overall_score 规则】
+overall_score 表示：在用户问题和 analysis_focus 语境下，基于当前 evidence 对公司财务表现形成的综合评分。
+- score 使用 0-100 的整数；
+- 分数必须基于 evidence，不能凭空给分；
+- 如果 evidence 明显不足、关键指标缺失、分析状态为 needs_more_data 或 analysis_failed，则 score 必须为 -1；
+- 如果用户问题偏向“股票能买吗”“是否值得投资”，score 只代表财务基本面综合评价，不构成投资建议；
+- basis 需要说明评分依据；
+- confidence 表示评分可信度，取值只能是 low、medium、high。
+
+评分区间参考：
+- 90-100：优秀，多个核心维度表现强，且数据支撑充分；
+- 80-89：较好，核心维度整体稳健，少量风险或短板；
+- 70-79：良好/中性偏好，有一定优势，但也存在明显待观察项；
+- 60-69：中性，优劣并存，结论需要谨慎；
+- 50-59：偏弱，多个关键维度存在压力；
+- 0-49：较差，核心财务表现或风险暴露明显；
+- -1：数据不足，无法可靠评分。
+
 【投资类问题规则】
 - 如果用户问“股票能买吗”“是否值得买”“能不能投资”等问题，不能直接给出买入、卖出、持有等投资指令。
 - 应从财务质量、盈利能力、成长性、现金流、偿债压力、经营质量和风险因素角度分析。
-- 必须在 conclusion 或 data_limitations 中说明：仅基于财务数据，不能替代完整投资决策，还需要结合估值、股价、行业周期、竞争格局和个人风险偏好。
+- 必须在 final_conclusion 或 data_limitations 中说明：仅基于财务数据，不能替代完整投资决策，还需要结合估值、股价、行业周期、竞争格局和个人风险偏好。
 
 【其他要求】
 - supporting_metrics 如果数量很多，无需全部罗列，可以只挑选其中两三个输出。
-- 最终的 conclusion 字段要有详细的、全局的完整结论与评估结果，字数不得少于200字。
+- 最终的 final_conclusion 字段要有详细的、全局的完整结论与评估结果，字数不得少于500字。
 
 【输出要求】
 你必须只输出 JSON，字段如下：
@@ -660,6 +783,12 @@ cross_statement_evidence_tool 可选 groups：
 {
   "status": "analysis_done | analysis_partial | needs_more_data | analysis_failed",
   "summary": "核心结论摘要",
+  "overall_score": {
+    "score": 0,
+    "label": "优秀 | 良好 | 偏弱 | 较差 | 无法评分",
+    "basis": "评分依据，说明为什么给出该分数",
+    "confidence": "low | medium | high"
+  },
   "dimensions": [
     {
       "name": "盈利能力 | 成长能力 | 偿债能力 | 现金流质量 | 资产质量 | 经营质量",
@@ -681,7 +810,7 @@ cross_statement_evidence_tool 可选 groups：
   "data_limitations": [
     "数据限制说明"
   ],
-  "conclusion": "面向用户问题的综合分析结论"
+  "final_conclusion": "面向用户问题的综合分析结论"
 }
 
 注意：
@@ -719,7 +848,7 @@ cross_statement_evidence_tool 可选 groups：
 3. dimensions 根据用户问题、analysis_focus 和 evidence 动态选择。
 4. supporting_metrics 只能来自 evidence。
 5. 如果 evidence 中缺少关键数据，请写入 data_limitations。
-6. conclusion 必须直接回应用户问题。
+6. final_conclusion 必须直接回应用户问题。
 """
         return [
             {
