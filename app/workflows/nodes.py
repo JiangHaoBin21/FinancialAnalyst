@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from app.utils.report_file_writer import save_markdown_report
 from app.workflows.state import (
     PlanStepStatus,
     WorkflowState,
@@ -287,8 +288,9 @@ class WorkflowNodes:
             }
         elif node_step.value == "report":
             additional = {
-                "report_draft": agent_update
+                "report_result": agent_update
             }
+            save_markdown_report(report_result=agent_update, output_dir="outputs/reports", filename_prefix="report")
         elif node_step.value == "reflection":
             additional = {
                 "reflection_result": agent_update

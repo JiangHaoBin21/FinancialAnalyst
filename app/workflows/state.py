@@ -106,8 +106,7 @@ class WorkflowState(TypedDict, total=False):
     analysis_summary: Optional[str]
 
     # 报告结果
-    report_draft: Optional[str]
-    report_sections: dict[str, Any]
+    report_result: dict
     final_report: Optional[str]
 
     # 反思结果
@@ -186,8 +185,7 @@ def create_initial_state(user_query: str) -> WorkflowState:
         "already_backfill": 0,
         "analysis_result": {},
         "analysis_summary": None,
-        "report_draft": None,
-        "report_sections": {},
+        "report_result": {},
         "final_report": None,
         "reflection_result": {},
         "needs_revision": False,

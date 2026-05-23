@@ -67,8 +67,8 @@ from test_supervisor_data_nodes import (
 
 
 DEFAULT_QUERY = (
-    "请只运行 300750.SZ 在 2023 年财务表现的分析阶段，覆盖盈利能力、"
-    "偿债能力、现金流质量和关键财务指标，不要生成报告。"
+    "请分析 300750.SZ 在 2023 年财务表现，覆盖盈利能力、偿债能力、"
+    "现金流质量和关键财务指标，并生成正式财务分析报告。"
 )
 
 MAX_STAGE_OUTPUT_PREVIEW_LENGTH = 3000
@@ -88,7 +88,10 @@ REQUIRED_MODEL_TABLES = [
     "fact_fina_indicator",
 ]
 
-EXPECTED_GRAPH_NODES = set(DATA_EXPECTED_GRAPH_NODES) | {"analysis_node"}
+EXPECTED_GRAPH_NODES = set(DATA_EXPECTED_GRAPH_NODES) | {
+    "analysis_node",
+    "report_node",
+}
 
 EXECUTION_AGENT_TO_NODE = {
     "SupervisorAgent": "supervisor_node",
@@ -103,6 +106,8 @@ EXECUTION_AGENT_TO_NODE = {
     "DataNode:backfill plan": "backfill_planner_node",
     "DataNode:finalize": "data_finalize_node",
     "AnalysisAgent": "analysis_node",
+    "ReportAgent": "report_node",
+    "ReflectionAgent": "reflection_node",
 }
 
 VALID_ANALYSIS_STATUSES = {
@@ -112,7 +117,19 @@ VALID_ANALYSIS_STATUSES = {
     "analysis_failed",
 }
 NON_FAILED_ANALYSIS_STATUSES = VALID_ANALYSIS_STATUSES - {"analysis_failed"}
-PLACEHOLDER_AGENT_NAMES = {"ReportAgent", "ReflectionAgent"}
+VALID_REPORT_STATUSES = {
+    "report_ready",
+    "report_partial",
+    "report_failed",
+}
+NON_FAILED_REPORT_STATUSES = VALID_REPORT_STATUSES - {"report_failed"}
+VALID_REPORT_TYPES = {
+    "financial_analysis",
+    "investment_reference",
+    "risk_analysis",
+    "general_report",
+}
+VALID_CONFIDENCE_LEVELS = {"high", "medium", "low"}
 
 
 class ReActToolCallLoggingLLMClient:
@@ -172,7 +189,7 @@ def parse_args() -> argparse.Namespace:
     parser = ChineseArgumentParser(
         add_help=False,
         description=(
-            "运行 supervisor + data + analysis 阶段的真实集成测试，"
+            "运行 supervisor + data + analysis + report 阶段的真实集成测试，"
             "覆盖图调度、真实 Agent、真实 LLM、真实数据库和必要时的 TuShare 回源。"
         )
     )
@@ -186,7 +203,7 @@ def parse_args() -> argparse.Namespace:
         "--query",
         default=DEFAULT_QUERY,
         metavar="文本",
-        help="发送给真实 SupervisorAgent 和规划 LLM 的用户输入。",
+        help="发送给真实 SupervisorAgent 和规划 LLM 的用户输入；默认会要求生成报告。",
     )
     parser.add_argument(
         "--full-results",
@@ -225,7 +242,7 @@ def build_real_nodes() -> tuple[WorkflowNodes, DataSubgraphNodes]:
         analysis_agent=AnalysisAgent(
             llm_client=ReActToolCallLoggingLLMClient(llm_client),
         ),
-        report_agent=ReportAgent(),
+        report_agent=ReportAgent(llm_client=llm_client),
         reflection_agent=ReflectionAgent(),
     )
 
@@ -279,6 +296,10 @@ def assert_real_dependencies(
         "AnalysisAgent 未通过 OpenAIClient 执行 ReAct tool_calls 观测。",
     )
     require(
+        isinstance(nodes.report_agent.llm_client, OpenAIClient),
+        "ReportAgent 未使用 OpenAIClient。",
+    )
+    require(
         isinstance(data_agent.required_parts_skill.llm_client, OpenAIClient),
         "RequiredPartsSkill 未使用 OpenAIClient。",
     )
@@ -309,6 +330,7 @@ def assert_real_dependencies(
     print("未注入 mock/fake/stub 依赖；Analysis LLM 仅包了一层打印代理。")
     print("LLM 客户端: OpenAIClient")
     print("Analysis ReAct 观测: 打印每轮大模型返回的 tool_calls")
+    print("Report 生成: OpenAIClient")
     print("数据库会话工厂: SessionLocal")
     print("行情/财务数据服务: TushareService")
 
@@ -456,6 +478,8 @@ def print_stage_output_after_node(
         print_data_stage_output(merged_state, full_results=full_results)
     elif node_name == "analysis_node":
         print_analysis_stage_output(merged_state, full_results=full_results)
+    elif node_name == "report_node":
+        print_report_stage_output(merged_state, full_results=full_results)
 
 
 def print_analysis_react_tool_calls(
@@ -594,6 +618,37 @@ def print_analysis_stage_output(
         payload["完整分析结果"] = analysis_result
 
     print_stage_payload("Analysis 阶段成果", payload, full_results=full_results)
+
+
+def print_report_stage_output(
+    state: WorkflowState,
+    *,
+    full_results: bool,
+) -> None:
+    report_result = state.get("report_result") or {}
+    markdown_report = report_result.get("markdown_report") or ""
+    payload = {
+        "状态": state.get("status"),
+        "当前阶段": state.get("current_stage"),
+        "下一步": state.get("next_step"),
+        "报告状态": report_result.get("status"),
+        "报告类型": report_result.get("report_type"),
+        "标题": report_result.get("title"),
+        "摘要": report_result.get("executive_summary"),
+        "总体评价": report_result.get("overall_assessment"),
+        "章节数量": len(report_result.get("sections") or []),
+        "风险提示数量": len(report_result.get("risk_warnings") or []),
+        "数据限制数量": len(report_result.get("data_limitations") or []),
+        "结论": report_result.get("conclusion"),
+        "免责声明": report_result.get("disclaimer"),
+        "Markdown长度": len(markdown_report),
+        "助手消息": state.get("assistant_message"),
+        "错误消息": state.get("error_message"),
+    }
+    if full_results:
+        payload["完整报告结果"] = report_result
+
+    print_stage_payload("Report 阶段成果", payload, full_results=full_results)
 
 
 def summarize_financial_data(financial_data: dict[str, Any]) -> dict[str, Any]:
@@ -764,19 +819,165 @@ def assert_analysis_stage_outputs(state: WorkflowState) -> None:
     print(preview_text)
 
 
-def assert_placeholder_agents_not_run(state: WorkflowState) -> None:
-    placeholder_history = [
+def assert_report_stage_outputs(state: WorkflowState) -> None:
+    print_step("Report 阶段断言")
+
+    report_history = [
         record
         for record in state.get("execution_history", [])
-        if record.get("agent") in PLACEHOLDER_AGENT_NAMES
+        if record.get("agent") == "ReportAgent"
     ]
+    require(report_history, "工作流没有执行 report_node。")
     require(
-        not placeholder_history,
+        any(record.get("success") for record in report_history),
+        f"report_node 未成功完成: {report_history}",
+    )
+
+    report_result = state.get("report_result")
+    require(isinstance(report_result, dict), "report_result 必须是字典。")
+    require(bool(report_result), "report_result 不能为空。")
+
+    required_keys = {
+        "status",
+        "report_type",
+        "title",
+        "executive_summary",
+        "overall_assessment",
+        "sections",
+        "risk_warnings",
+        "data_limitations",
+        "conclusion",
+        "disclaimer",
+        "markdown_report",
+    }
+    missing_keys = required_keys - set(report_result)
+    require(not missing_keys, f"report_result 缺少字段: {sorted(missing_keys)}")
+
+    require(
+        report_result["status"] in VALID_REPORT_STATUSES,
+        f"未预期的报告状态: {report_result['status']}",
+    )
+    require(
+        report_result["status"] in NON_FAILED_REPORT_STATUSES,
+        "report_result.status 为 report_failed。",
+    )
+    analysis_status = (state.get("analysis_result") or {}).get("status")
+    expected_report_statuses = {
+        "analysis_done": {"report_ready"},
+        "analysis_partial": {"report_partial"},
+        "needs_more_data": {"report_partial"},
+    }
+    if analysis_status in expected_report_statuses:
+        require(
+            report_result["status"] in expected_report_statuses[analysis_status],
+            (
+                "report_result.status 与 analysis_result.status 不匹配: "
+                f"analysis={analysis_status}, report={report_result['status']}"
+            ),
+        )
+    require(
+        report_result["report_type"] in VALID_REPORT_TYPES,
+        f"未预期的报告类型: {report_result['report_type']}",
+    )
+
+    for field_name in (
+        "title",
+        "executive_summary",
+        "conclusion",
+        "disclaimer",
+        "markdown_report",
+    ):
+        value = report_result[field_name]
+        require(
+            isinstance(value, str) and bool(value.strip()),
+            f"report_result.{field_name} 必须是非空字符串。",
+        )
+
+    overall_assessment = report_result["overall_assessment"]
+    require(
+        isinstance(overall_assessment, dict),
+        "report_result.overall_assessment 必须是字典。",
+    )
+    assessment_required_keys = {"score", "label", "basis", "confidence"}
+    assessment_missing_keys = assessment_required_keys - set(overall_assessment)
+    require(
+        not assessment_missing_keys,
+        f"overall_assessment 缺少字段: {sorted(assessment_missing_keys)}",
+    )
+    require(
+        overall_assessment.get("confidence") in VALID_CONFIDENCE_LEVELS,
+        f"overall_assessment.confidence 非法: {overall_assessment.get('confidence')}",
+    )
+
+    sections = report_result["sections"]
+    require(isinstance(sections, list), "report_result.sections 必须是列表。")
+    require(bool(sections), "report_result.sections 不能为空。")
+    for index, section in enumerate(sections, start=1):
+        require(isinstance(section, dict), f"第 {index} 个 section 必须是字典。")
+        for field_name in ("heading", "summary"):
+            value = section.get(field_name)
+            require(
+                isinstance(value, str) and bool(value.strip()),
+                f"第 {index} 个 section.{field_name} 必须是非空字符串。",
+            )
+        require(
+            isinstance(section.get("key_points"), list),
+            f"第 {index} 个 section.key_points 必须是列表。",
+        )
+        require(
+            isinstance(section.get("supporting_metrics"), list),
+            f"第 {index} 个 section.supporting_metrics 必须是列表。",
+        )
+
+    require(
+        isinstance(report_result["risk_warnings"], list),
+        "report_result.risk_warnings 必须是列表。",
+    )
+    require(
+        isinstance(report_result["data_limitations"], list),
+        "report_result.data_limitations 必须是列表。",
+    )
+
+    markdown_report = report_result["markdown_report"]
+    require(
+        markdown_report.lstrip().startswith("#"),
+        "report_result.markdown_report 应以 Markdown 标题开头。",
+    )
+    require(
+        "```" not in markdown_report,
+        "report_result.markdown_report 不应包含 Markdown 代码块。",
+    )
+    require(
+        "数据限制" in markdown_report,
+        "report_result.markdown_report 缺少数据限制章节。",
+    )
+    require(
+        "免责声明" in markdown_report,
+        "report_result.markdown_report 缺少免责声明章节。",
+    )
+
+    require(
+        state.get("last_completed_stage") in {
+            WorkflowStep.REPORT.value,
+            WorkflowStep.REFLECTION.value,
+            WorkflowStep.FINISHED.value,
+        },
         (
-            "这个 analysis 阶段真实集成测试不应执行当前占位实现的 Agent: "
-            f"{placeholder_history}"
+            "report 执行后 last_completed_stage 应为 report 或后续阶段；"
+            f"实际值为 {state.get('last_completed_stage')!r}。"
         ),
     )
+
+    print("report_node 已成功执行。")
+    print(f"报告状态: {report_result['status']}")
+    print(f"报告类型: {report_result['report_type']}")
+    print(f"报告章节数量: {len(sections)}")
+    print(f"Markdown 报告长度: {len(markdown_report)}")
+
+    preview = normalize_for_json(report_result)
+    preview_text = json.dumps(preview, ensure_ascii=False, indent=2, default=str)
+    print("report_result 完整内容:")
+    print(preview_text)
 
 
 def run_graph_scheduling_check(
@@ -787,7 +988,7 @@ def run_graph_scheduling_check(
     *,
     full_results: bool,
 ) -> tuple[WorkflowState, set[str]]:
-    print_step("图调度检查：运行到 Analysis 阶段")
+    print_step("图调度检查：运行到 Report 阶段")
     graph = WorkflowGraph(
         nodes=nodes,
         data_nodes=data_nodes,
@@ -812,7 +1013,7 @@ def run_graph_scheduling_check(
 
     assert_graph_node_outputs(final_state)
     assert_analysis_stage_outputs(final_state)
-    assert_placeholder_agents_not_run(final_state)
+    assert_report_stage_outputs(final_state)
 
     covered = covered_nodes_from_history(final_state)
     missing_nodes = EXPECTED_GRAPH_NODES - covered
@@ -830,7 +1031,7 @@ def main() -> None:
 
     print_step("集成测试输入")
     print("本脚本使用真实配置服务:")
-    print("  - OpenAIClient：用于规划、Supervisor 审查和 Analysis LLM 调用")
+    print("  - OpenAIClient：用于规划、Supervisor 审查、Analysis 和 Report LLM 调用")
     print("  - SessionLocal 和 repositories：用于访问本地财务数据库")
     print("  - TushareService：在需要数据回填时访问 TuShare")
     print(f"用户输入: {args.query}")
@@ -856,7 +1057,7 @@ def main() -> None:
     assert_state_json_safe(final_state)
 
     print_step("完成")
-    print("Supervisor + Data + Analysis 真实集成检查完成。")
+    print("Supervisor + Data + Analysis + Report 真实集成检查完成。")
 
 
 if __name__ == "__main__":
