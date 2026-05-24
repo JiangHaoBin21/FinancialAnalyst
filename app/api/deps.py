@@ -1,14 +1,15 @@
-"""API dependency helpers."""
+# app/api/deps.py
 
-from app.core.config import Settings
+from functools import lru_cache
 
-
-def get_settings() -> Settings:
-    """Build default settings for the application."""
-    return Settings()
+from app.application.financial_analysis_runner import FinancialAnalysisRunner
 
 
-def get_runtime_context() -> dict[str, str]:
-    """Expose lightweight runtime metadata to the API layer."""
-    settings = get_settings()
-    return {"app_name": settings.app_name, "environment": settings.environment}
+@lru_cache(maxsize=1)
+def get_financial_analysis_runner() -> FinancialAnalysisRunner:
+    """获取财务分析工作流运行器。
+
+    使用 lru_cache 是为了让 Runner 在应用生命周期内复用。
+    Runner 内部会懒加载 workflow_graph，避免每次请求都重新构建图。
+    """
+    return FinancialAnalysisRunner()

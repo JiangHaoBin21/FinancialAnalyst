@@ -1,28 +1,32 @@
-"""Application entrypoint for the FinancialAnalyst project."""
+# app/main.py
 
-from pathlib import Path
-import sys
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.api.routes import register_routes
-from app.workflows.graph import build_workflow_graph
+from app.api.routes import api_router
 
 
-def create_app() -> dict[str, object]:
-    """Return a minimal app descriptor for the current project layout."""
-    return {
-        "name": "FinancialAnalyst",
-        "status": "initialized",
-        "routes": register_routes(),
-        "workflow": build_workflow_graph(),
-    }
+app = FastAPI(
+    title="Multi-Agent Financial Analysis API",
+    description="基于 LangGraph 的多 Agent 财务分析系统接口服务",
+    version="0.1.0",
+)
 
 
-if __name__ == "__main__":
-    application = create_app()
-    print(
-        f"{application['name']} is {application['status']} "
-        f"with {len(application['routes'])} routes."
-    )
+# 开发阶段先放开跨域，方便后续前端本地调试。
+# 正式部署时建议改成具体前端地址，例如 http://localhost:3000。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(api_router, prefix="/api/v1")
+
+
+@app.get("/health", summary="健康检查")
+def health_check() -> dict:
+    return {"status": "ok"}
