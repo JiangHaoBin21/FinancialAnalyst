@@ -68,7 +68,7 @@ from test_supervisor_data_nodes import (
 
 DEFAULT_QUERY = (
     "请分析 300750.SZ 在 2023 年财务表现，覆盖盈利能力、偿债能力、"
-    "现金流质量和关键财务指标，并生成正式财务分析报告。"
+    "现金流质量和关键财务指标，生成正式财务分析报告，并进行最终质量审查。"
 )
 
 MAX_STAGE_OUTPUT_PREVIEW_LENGTH = 3000
@@ -91,6 +91,7 @@ REQUIRED_MODEL_TABLES = [
 EXPECTED_GRAPH_NODES = set(DATA_EXPECTED_GRAPH_NODES) | {
     "analysis_node",
     "report_node",
+    "reflection_node",
 }
 
 EXECUTION_AGENT_TO_NODE = {
@@ -130,6 +131,29 @@ VALID_REPORT_TYPES = {
     "general_report",
 }
 VALID_CONFIDENCE_LEVELS = {"high", "medium", "low"}
+VALID_REFLECTION_STATUSES = {
+    "reflection_done",
+    "reflection_failed",
+}
+NON_FAILED_REFLECTION_STATUSES = VALID_REFLECTION_STATUSES - {"reflection_failed"}
+VALID_REFLECTION_DECISIONS = {
+    "pass",
+    "pass_with_minor_revision",
+    "needs_report_regeneration",
+    "needs_analysis_revision",
+    "needs_more_data",
+    "failed",
+}
+REFLECTION_DECISION_TO_NEXT_STAGE = {
+    "pass": "finished",
+    "pass_with_minor_revision": "finished",
+    "needs_report_regeneration": "report",
+    "needs_analysis_revision": "analysis",
+    "needs_more_data": "data",
+    "failed": "error",
+}
+DELIVERABLE_REFLECTION_DECISIONS = {"pass", "pass_with_minor_revision"}
+VALID_REFLECTION_ISSUE_SEVERITIES = {"low", "medium", "high", "critical"}
 
 
 class ReActToolCallLoggingLLMClient:
@@ -189,7 +213,7 @@ def parse_args() -> argparse.Namespace:
     parser = ChineseArgumentParser(
         add_help=False,
         description=(
-            "运行 supervisor + data + analysis + report 阶段的真实集成测试，"
+            "运行 supervisor + data + analysis + report + reflection 阶段的真实集成测试，"
             "覆盖图调度、真实 Agent、真实 LLM、真实数据库和必要时的 TuShare 回源。"
         )
     )
@@ -203,7 +227,7 @@ def parse_args() -> argparse.Namespace:
         "--query",
         default=DEFAULT_QUERY,
         metavar="文本",
-        help="发送给真实 SupervisorAgent 和规划 LLM 的用户输入；默认会要求生成报告。",
+        help="发送给真实 SupervisorAgent 和规划 LLM 的用户输入；默认会要求生成报告并执行最终质量审查。",
     )
     parser.add_argument(
         "--full-results",
@@ -243,7 +267,7 @@ def build_real_nodes() -> tuple[WorkflowNodes, DataSubgraphNodes]:
             llm_client=ReActToolCallLoggingLLMClient(llm_client),
         ),
         report_agent=ReportAgent(llm_client=llm_client),
-        reflection_agent=ReflectionAgent(),
+        reflection_agent=ReflectionAgent(llm_client=llm_client),
     )
 
     data_nodes = DataSubgraphNodes(
@@ -300,6 +324,10 @@ def assert_real_dependencies(
         "ReportAgent 未使用 OpenAIClient。",
     )
     require(
+        isinstance(nodes.reflection_agent.llm_client, OpenAIClient),
+        "ReflectionAgent 未使用 OpenAIClient。",
+    )
+    require(
         isinstance(data_agent.required_parts_skill.llm_client, OpenAIClient),
         "RequiredPartsSkill 未使用 OpenAIClient。",
     )
@@ -331,6 +359,7 @@ def assert_real_dependencies(
     print("LLM 客户端: OpenAIClient")
     print("Analysis ReAct 观测: 打印每轮大模型返回的 tool_calls")
     print("Report 生成: OpenAIClient")
+    print("Reflection 审查: OpenAIClient")
     print("数据库会话工厂: SessionLocal")
     print("行情/财务数据服务: TushareService")
 
@@ -480,6 +509,8 @@ def print_stage_output_after_node(
         print_analysis_stage_output(merged_state, full_results=full_results)
     elif node_name == "report_node":
         print_report_stage_output(merged_state, full_results=full_results)
+    elif node_name == "reflection_node":
+        print_reflection_stage_output(merged_state, full_results=full_results)
 
 
 def print_analysis_react_tool_calls(
@@ -649,6 +680,34 @@ def print_report_stage_output(
         payload["完整报告结果"] = report_result
 
     print_stage_payload("Report 阶段成果", payload, full_results=full_results)
+
+
+def print_reflection_stage_output(
+    state: WorkflowState,
+    *,
+    full_results: bool,
+) -> None:
+    reflection_result = state.get("reflection_result") or {}
+    final_report_markdown = reflection_result.get("final_report_markdown") or ""
+    payload = {
+        "状态": state.get("status"),
+        "当前阶段": state.get("current_stage"),
+        "下一步": state.get("next_step"),
+        "审查状态": reflection_result.get("status"),
+        "审查决定": reflection_result.get("decision"),
+        "建议下一阶段": reflection_result.get("recommended_next_stage"),
+        "审查摘要": reflection_result.get("summary"),
+        "问题数量": len(reflection_result.get("issues") or []),
+        "修订指令数量": len(reflection_result.get("revision_instructions") or []),
+        "修订后报告长度": len(final_report_markdown),
+        "给 Supervisor 的说明": reflection_result.get("notes_for_supervisor"),
+        "助手消息": state.get("assistant_message"),
+        "错误消息": state.get("error_message"),
+    }
+    if full_results:
+        payload["完整审查结果"] = reflection_result
+
+    print_stage_payload("Reflection 阶段成果", payload, full_results=full_results)
 
 
 def summarize_financial_data(financial_data: dict[str, Any]) -> dict[str, Any]:
@@ -980,6 +1039,136 @@ def assert_report_stage_outputs(state: WorkflowState) -> None:
     print(preview_text)
 
 
+def assert_reflection_stage_outputs(state: WorkflowState) -> None:
+    print_step("Reflection 阶段断言")
+
+    reflection_history = [
+        record
+        for record in state.get("execution_history", [])
+        if record.get("agent") == "ReflectionAgent"
+    ]
+    require(reflection_history, "工作流没有执行 reflection_node。")
+    require(
+        any(record.get("success") for record in reflection_history),
+        f"reflection_node 未成功完成: {reflection_history}",
+    )
+
+    reflection_result = state.get("reflection_result")
+    require(isinstance(reflection_result, dict), "reflection_result 必须是字典。")
+    require(bool(reflection_result), "reflection_result 不能为空。")
+
+    required_keys = {
+        "status",
+        "decision",
+        "recommended_next_stage",
+        "summary",
+        "issues",
+        "revision_instructions",
+        "final_report_markdown",
+        "notes_for_supervisor",
+    }
+    missing_keys = required_keys - set(reflection_result)
+    require(not missing_keys, f"reflection_result 缺少字段: {sorted(missing_keys)}")
+
+    status = reflection_result["status"]
+    decision = reflection_result["decision"]
+    recommended_next_stage = reflection_result["recommended_next_stage"]
+    require(
+        status in VALID_REFLECTION_STATUSES,
+        f"未预期的审查状态: {status}",
+    )
+    require(
+        status in NON_FAILED_REFLECTION_STATUSES,
+        "reflection_result.status 为 reflection_failed。",
+    )
+    require(
+        decision in VALID_REFLECTION_DECISIONS,
+        f"未预期的审查决定: {decision}",
+    )
+    require(
+        recommended_next_stage == REFLECTION_DECISION_TO_NEXT_STAGE[decision],
+        (
+            "reflection_result 路由建议与 decision 不匹配: "
+            f"decision={decision}, recommended_next_stage={recommended_next_stage}"
+        ),
+    )
+    require(
+        decision in DELIVERABLE_REFLECTION_DECISIONS,
+        f"最终 Reflection 结果未达到可交付状态: {decision}",
+    )
+    require(
+        isinstance(reflection_result["summary"], str)
+        and bool(reflection_result["summary"].strip()),
+        "reflection_result.summary 必须是非空字符串。",
+    )
+
+    issues = reflection_result["issues"]
+    require(isinstance(issues, list), "reflection_result.issues 必须是列表。")
+    for index, issue in enumerate(issues, start=1):
+        require(isinstance(issue, dict), f"第 {index} 个 issue 必须是字典。")
+        issue_missing_keys = {
+            "type",
+            "severity",
+            "location",
+            "description",
+            "suggestion",
+        } - set(issue)
+        require(
+            not issue_missing_keys,
+            f"第 {index} 个 issue 缺少字段: {sorted(issue_missing_keys)}",
+        )
+        require(
+            issue.get("severity") in VALID_REFLECTION_ISSUE_SEVERITIES,
+            f"第 {index} 个 issue.severity 非法: {issue.get('severity')}",
+        )
+
+    revision_instructions = reflection_result["revision_instructions"]
+    require(
+        isinstance(revision_instructions, list),
+        "reflection_result.revision_instructions 必须是列表。",
+    )
+    notes_for_supervisor = reflection_result["notes_for_supervisor"]
+    require(
+        isinstance(notes_for_supervisor, list),
+        "reflection_result.notes_for_supervisor 必须是列表。",
+    )
+
+    final_report_markdown = reflection_result["final_report_markdown"]
+    if decision == "pass":
+        require(
+            final_report_markdown is None,
+            "decision 为 pass 时 final_report_markdown 必须为 null。",
+        )
+    elif decision == "pass_with_minor_revision":
+        require(
+            isinstance(final_report_markdown, str)
+            and bool(final_report_markdown.strip()),
+            "轻量修订通过时 final_report_markdown 必须为非空字符串。",
+        )
+
+    require(
+        state.get("last_completed_stage") in {
+            WorkflowStep.REFLECTION.value,
+            WorkflowStep.FINISHED.value,
+        },
+        (
+            "reflection 执行后 last_completed_stage 应为 reflection 或 finished；"
+            f"实际值为 {state.get('last_completed_stage')!r}。"
+        ),
+    )
+
+    print("reflection_node 已成功执行。")
+    print(f"审查状态: {status}")
+    print(f"审查决定: {decision}")
+    print(f"发现问题数量: {len(issues)}")
+    print(f"修订指令数量: {len(revision_instructions)}")
+
+    output = normalize_for_json(reflection_result)
+    output_text = json.dumps(output, ensure_ascii=False, indent=2, default=str)
+    print("reflection_result 完整内容:")
+    print(output_text)
+
+
 def run_graph_scheduling_check(
     nodes: WorkflowNodes,
     data_nodes: DataSubgraphNodes,
@@ -988,7 +1177,7 @@ def run_graph_scheduling_check(
     *,
     full_results: bool,
 ) -> tuple[WorkflowState, set[str]]:
-    print_step("图调度检查：运行到 Report 阶段")
+    print_step("图调度检查：运行到 Reflection 阶段")
     graph = WorkflowGraph(
         nodes=nodes,
         data_nodes=data_nodes,
@@ -1014,6 +1203,7 @@ def run_graph_scheduling_check(
     assert_graph_node_outputs(final_state)
     assert_analysis_stage_outputs(final_state)
     assert_report_stage_outputs(final_state)
+    assert_reflection_stage_outputs(final_state)
 
     covered = covered_nodes_from_history(final_state)
     missing_nodes = EXPECTED_GRAPH_NODES - covered
@@ -1031,7 +1221,7 @@ def main() -> None:
 
     print_step("集成测试输入")
     print("本脚本使用真实配置服务:")
-    print("  - OpenAIClient：用于规划、Supervisor 审查、Analysis 和 Report LLM 调用")
+    print("  - OpenAIClient：用于规划、Supervisor 审查、Analysis、Report 和 Reflection LLM 调用")
     print("  - SessionLocal 和 repositories：用于访问本地财务数据库")
     print("  - TushareService：在需要数据回填时访问 TuShare")
     print(f"用户输入: {args.query}")
@@ -1057,7 +1247,7 @@ def main() -> None:
     assert_state_json_safe(final_state)
 
     print_step("完成")
-    print("Supervisor + Data + Analysis + Report 真实集成检查完成。")
+    print("Supervisor + Data + Analysis + Report + Reflection 真实集成检查完成。")
 
 
 if __name__ == "__main__":
