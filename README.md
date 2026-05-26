@@ -1,101 +1,119 @@
-# FinancialAnalyst
+# 📊 FinancialAnalyst
 
-FinancialAnalyst 是一个面向 A 股上市公司的多 Agent 财务分析原型项目。当前系统以 LangGraph 工作流为核心，结合 OpenAI 兼容的大模型接口、TuShare Pro 数据源、PostgreSQL/SQLAlchemy 持久化层，推进从用户问题理解、任务规划、数据准备、证据收集、结构化分析到 Markdown 报告生成的端到端链路。
+FinancialAnalyst 是一个面向 A 股上市公司的多 Agent 财务分析项目。系统以
+`LangGraph` 为流程编排核心，组合 OpenAI 兼容大模型、TuShare Pro 数据源和
+PostgreSQL/SQLAlchemy 数据层，将自然语言问题转换为数据准备、证据分析、报告生成与质量审查流程。
 
-> 当前项目仍处于开发阶段。截至 2026-05-23，规划、数据准备、完整性检查、回源补数、分析证据工具、结构化分析和报告生成链路已经基本打通；ReflectionAgent、API 服务化入口、快照持久化和部分早期脚本仍需继续完善。
+> **项目状态（基于 2026-05-26 源码核对）**
+> Supervisor、Data、Analysis、Report 与基于 LLM 的 Reflection 链路已在集成脚本中装配；
+> FastAPI 路由与应用层 Runner 已落地。项目仍处于开发阶段，默认图装配、可选依赖、
+> 数据库迁移和结果快照持久化仍需要继续收敛，详见下文“已知限制”。
 
-## 当前能力
+## ✨ 核心能力
 
-- `SupervisorAgent + PlanningSkill` 调用 LLM，将自然语言请求解析为结构化任务计划，并支持缺失信息补问。
-- `SupervisorReviewSkill` 在 Data、Analysis、Report、Reflection 等阶段后做流程层审查，决定继续、回退、补数据、等待用户输入或进入错误态。
-- `DataAgent` 通过 LLM 规划所需数据分片，并在数据不完整时规划是否回源补数。
-- `DataSubgraph` 使用 LangGraph 将利润表、资产负债表、现金流量表和财务指标分片并行抓取，再统一合并、检查完整性和 finalize。
-- `CompanyResolver` 优先查询本地 `dim_company`，找不到时调用 TuShare 回源并落库。
-- `DataPreparationSkill` 优先读取本地 PostgreSQL，发现缺失且回源计划允许时按报告期调用 TuShare 并 upsert。
-- `AnalysisAgent` 已不再是简单 mock：它通过 ReAct 工具调用，从利润表、资产负债表、现金流量表、财务指标和跨报表诊断工具中收集证据，再由 LLM 生成结构化 `analysis_result`。
-- `ReportAgent` 已不再是简单 mock：它基于 `analysis_result` 生成结构化 `report_result` 和完整 `markdown_report`，并要求保留数据限制、风险提示和免责声明。
-- 工作流在 Report 阶段会把 `markdown_report` 保存到 `outputs/reports/`。
+| 能力 | 说明 | 当前实现 |
+| --- | --- | --- |
+| 任务规划 | 将公司、时间范围、分析重点和输出方式解析为任务计划 | `SupervisorAgent`、`PlanningSkill` |
+| 流程审查 | 每个主阶段完成后判断继续、回退、补数或失败 | `SupervisorReviewSkill` |
+| 数据准备 | 公司解析、本地查询、完整性检查与 TuShare 回源补数 | `DataAgent`、`DataSubgraph` |
+| 财务证据分析 | 通过 ReAct tool calling 从多类财务数据中收集证据 | `AnalysisAgent` |
+| 报告生成 | 生成结构化结果与正式 Markdown 报告 | `ReportAgent` |
+| 报告质检 | 检查报告忠实性、风险披露、结构与可交付性 | `ReflectionAgent` |
+| 接口层 | 健康检查与同步分析请求路由 | FastAPI、`FinancialAnalysisRunner` |
+| 可恢复执行 | 工作流支持注入 LangGraph checkpointer 与 `thread_id` | `WorkflowGraph` |
 
-## 工作流概览
+## 🔄 工作流
 
 ```text
 用户问题
   -> SupervisorAgent
-     -> PlanningSkill
-        -> LLM 生成 JSON 计划
-        -> Parser/Policy 校验、兜底、补全
+     -> PlanningSkill：LLM 规划 + parser/policy 校验与兜底
   -> DataSubgraph
-     -> DataAgent 规划 required_data_parts
-     -> CompanyProfileFetchSkill 解析公司画像
+     -> DataAgent：规划 required_data_parts
+     -> CompanyProfileFetchSkill：解析公司画像
      -> 并行抓取 income / balance / cashflow / fina_indicator
-     -> 合并数据
-     -> CompletenessCheckSkill 检查缺失报告期
-     -> BackfillPlanSkill 判断是否需要 TuShare 回源
+     -> CompletenessCheckSkill：检查报告期覆盖
+     -> BackfillPlanSkill：必要时回源 TuShare 并落库
      -> Data finalize
-  -> SupervisorReviewSkill 审查 Data 产物
+  -> SupervisorReviewSkill：审查 Data 产物
   -> AnalysisAgent
-     -> ReAct 调用证据工具
-     -> LLM 生成结构化 analysis_result
-  -> SupervisorReviewSkill 审查 Analysis 产物
+     -> ReAct 调用财务证据工具
+     -> 输出 analysis_result
+  -> SupervisorReviewSkill：审查 Analysis 产物
   -> ReportAgent
-     -> LLM 生成结构化 report_result
-     -> 输出 markdown_report
-     -> 保存 Markdown 文件到 outputs/reports/
-  -> SupervisorReviewSkill 审查 Report 产物
-  -> ReflectionAgent 复核（当前为最小通过逻辑）
-  -> finished
+     -> 输出 report_result 与 markdown_report
+     -> 保存 outputs/reports/report_<标题>_<时间戳>.md
+  -> SupervisorReviewSkill：审查 Report 产物
+  -> ReflectionAgent：报告质量复核与路由建议
+  -> SupervisorReviewSkill：消费复核结论并决定完成或回退
+  -> finished / error / await_user_input
 ```
 
-## 项目结构
+### 数据分片
 
-```text
-FinancialAnalyst/
-├── app/
-│   ├── agents/              # Supervisor/Data/Analysis/Report/Reflection Agent
-│   ├── api/                 # 路由和 schema 占位，当前不是完整 Web 服务
-│   ├── core/                # 配置和数据库连接
-│   ├── domain/              # 规划、时间范围、完整性检查等领域对象
-│   ├── exceptions/          # 数据阶段异常
-│   ├── llms/                # OpenAI 兼容 LLM 客户端
-│   ├── models/              # SQLAlchemy ORM 模型和轻量 schema
-│   ├── repositories/        # 公司、三大报表、财务指标、结果快照等数据访问层
-│   ├── services/            # TuShare、指标、报告、持久化等服务
-│   ├── skills/
-│   │   ├── analysis/        # 报表证据工具、跨表诊断工具、指标分组和注册表
-│   │   ├── capabilities/    # 公司解析、时间解析、完整性检查等基础能力
-│   │   ├── data/            # 数据分片规划、公司画像、数据准备、回源规划
-│   │   └── supervisor/      # 规划 prompt/parser/policy、Supervisor 审查技能
-│   ├── tools/               # 早期工具函数，部分仍是占位实现
-│   ├── utils/               # 报告文件写入、日期工具等
-│   ├── workflows/
-│   │   ├── subgraphs/       # DataSubgraph 节点和路由
-│   │   ├── graph.py         # 主 LangGraph 门面
-│   │   ├── nodes.py         # 主阶段节点
-│   │   └── state.py         # WorkflowState 和状态工具
-│   └── main.py              # 最小应用描述入口
-├── docs/
-│   └── subagent_contracts.md
-├── scripts/
-│   ├── init_db.py
-│   ├── test_planner.py
-│   ├── test_data_preparation_skill.py
-│   ├── test_data_preparation_flow.py
-│   ├── test_supervisor_data_analysis_nodes.py
-│   └── run_demo.py          # 早期调试入口，接口可能落后于当前 Agent 构造方式
-├── tests/
-├── requirements.txt
-└── README.md
+Data 阶段当前支持以下核心财务分片：
+
+| 分片 | 数据内容 |
+| --- | --- |
+| `income_statements` | 利润表 |
+| `balance_sheets` | 资产负债表 |
+| `cashflow_statements` | 现金流量表 |
+| `financial_indicators` | TuShare 财务指标 |
+
+### 分析证据工具
+
+`AnalysisAgent` 可调用的证据工具包括：
+
+- `income_statement_evidence_tool`
+- `balance_sheet_evidence_tool`
+- `cashflow_statement_evidence_tool`
+- `fina_indicator_evidence_tool`
+- `cross_statement_evidence_tool`
+
+## 🧰 技术栈
+
+| 分类 | 技术 |
+| --- | --- |
+| 工作流编排 | LangGraph |
+| 大模型接入 | OpenAI Python SDK，支持 OpenAI 兼容 Chat Completions API |
+| 财务数据源 | TuShare Pro |
+| 数据存储 | PostgreSQL、SQLAlchemy |
+| HTTP 接口 | FastAPI |
+| 输出格式 | 结构化 JSON、Markdown 报告 |
+
+## 🚀 快速开始
+
+### 1. 环境准备
+
+建议使用 **Python 3.10+**，并准备：
+
+- 可连接的 PostgreSQL 数据库。
+- 可用的 TuShare Pro Token。
+- 一个支持 Chat Completions 的 OpenAI 兼容模型服务。
+
+### 2. 安装基础依赖
+
+Windows PowerShell 示例：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-## 运行环境
+当前 `requirements.txt` 覆盖主工作流使用的核心依赖，但尚未包含所有可选入口依赖：
 
-建议使用 Python 3.10+，并准备：
+```powershell
+# 启动 FastAPI 接口时需要
+python -m pip install fastapi uvicorn
 
-- PostgreSQL 数据库
-- TuShare Pro Token
-- 一个兼容 OpenAI Chat Completions API 的大模型服务
+# 运行 PostgreSQL checkpoint 示例脚本时需要
+python -m pip install langgraph-checkpoint-postgres "psycopg[binary,pool]"
+```
 
-当前配置从项目根目录 `.env` 读取：
+### 3. 配置环境变量
+
+在项目根目录创建或维护 `.env`：
 
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/finance_db
@@ -105,185 +123,162 @@ XIAOMI_MODEL_NAME=your_model_name
 XIAOMI_BASE_URL=https://api.example.com/v1/
 ```
 
-说明：代码内部部分字段仍沿用 `deepseek_*` 命名，但实际读取的是 `XIAOMI_API_KEY`、`XIAOMI_MODEL_NAME`、`XIAOMI_BASE_URL`。
+> `OpenAIClientConfig` 内部字段仍沿用 `deepseek_*` 命名，但当前实际读取的是
+> `XIAOMI_API_KEY`、`XIAOMI_MODEL_NAME` 和 `XIAOMI_BASE_URL`。
 
-安装依赖：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-初始化数据库：
+### 4. 初始化数据库
 
 ```powershell
 python scripts/init_db.py
 ```
 
-数据库模型以 `app/models/db_models.py` 为准，主要表包括：
+`scripts/init_db.py` 使用直接 `CREATE TABLE` 语句，适合初始化空数据库；它不是迁移工具。
+已有表结构发生变化时，应先核对 ORM 模型或自行执行迁移，而不是重复运行该脚本。
 
-- `dim_company`
-- `fact_income`
-- `fact_balance_sheet`
-- `fact_cashflow`
-- `fact_fina_indicator`
-- `fact_derived_metrics`
-- `analysis_result`
-- `report_snapshot`
-- `audit_log`
+### 5. 运行端到端集成检查
 
-注意：`scripts/init_db.py` 是手工建表脚本，适合快速初始化。当前 ORM 字段扩展较快，已有数据库需要自行迁移或使用集成脚本中的 schema 检查确认表结构是否匹配。
-
-## 常用脚本
-
-查看最小应用描述：
+当前覆盖最完整、并且显式装配各 Agent 依赖的入口是：
 
 ```powershell
-python app/main.py
+python scripts/test_supervisor_data_analysis_nodes.py --help
+python scripts/test_supervisor_data_analysis_nodes.py --query "请分析 300750.SZ 在 2023 年的财务表现，并生成正式报告。"
 ```
 
-测试规划链路：
+该脚本会：
+
+- 使用真实 `OpenAIClient` 进行规划、阶段审查、分析、报告生成和最终复核。
+- 使用本地 PostgreSQL，并在需要时访问 TuShare 补充数据。
+- 检查主图及 DataSubgraph 的阶段产物和 JSON 安全性。
+- 将生成的 Markdown 报告写入 `outputs/reports/`。
+
+运行会产生外部模型调用成本，并可能写入数据库和报告文件。
+
+## 🌐 API 入口
+
+项目已定义 FastAPI 应用及以下路由：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/health` | 健康检查 |
+| `POST` | `/api/v1/financial-analysis` | 同步执行一次财务分析任务 |
+
+安装接口依赖后，可启动服务并验证健康检查：
 
 ```powershell
-python scripts/test_planner.py
+python -m uvicorn app.main:app --reload
+Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-测试公司解析、本地数据读取、完整性检查和 TuShare 回源流程：
+请求体定义如下：
 
-```powershell
-python scripts/test_data_preparation_skill.py
-python scripts/test_data_preparation_flow.py
+```json
+{
+  "query": "请分析宁德时代 2023 年的财务表现并生成报告",
+  "thread_id": "optional-thread-id",
+  "include_state": false
+}
 ```
 
-运行当前最完整的真实集成检查：
+接口采用同步阻塞方式执行工作流。当前 `POST /api/v1/financial-analysis` 的默认 Runner
+依赖默认工作流装配，而该装配仍存在 Reflection 依赖参数未同步的问题；在修复该装配或
+显式注入正确节点之前，应以完整集成脚本作为主链路验证入口。
 
-```powershell
-python scripts/test_supervisor_data_analysis_nodes.py
-```
+## 🗃️ 数据存储与产物
 
-该脚本会使用真实 `OpenAIClient`、真实数据库、真实 TuShare 服务，覆盖 Supervisor、Data、Analysis 和 Report 阶段，并打印 Analysis ReAct 阶段的 tool calls。运行前必须确保 `.env`、数据库和外部服务可用。
+### 数据库表
 
-部分早期脚本仍待同步最新构造参数和依赖注入方式，例如 `scripts/run_demo.py`、`scripts/sync_company_data.py`、`scripts/seed_companies.py`。使用前应先检查当前 Agent/Service 构造函数。
+ORM 模型及初始化脚本覆盖以下主要表：
 
-## 核心模块
+| 表名 | 用途 |
+| --- | --- |
+| `dim_company` | 公司基础信息 |
+| `fact_income` | 利润表数据 |
+| `fact_balance_sheet` | 资产负债表数据 |
+| `fact_cashflow` | 现金流量表数据 |
+| `fact_fina_indicator` | 财务指标数据 |
+| `fact_derived_metrics` | 衍生指标与评分预留 |
+| `analysis_result` | 分析结果快照预留 |
+| `report_snapshot` | 报告快照预留 |
+| `audit_log` | 审计记录预留 |
 
-### Supervisor 层
+### 报告输出
 
-`app/skills/supervisor/` 负责规划和流程审查：
-
-- `planning_prompt_builder.py` 构造规划 prompt。
-- `planning_parser.py` 从 LLM 输出中提取 JSON，并校验 `PlanningResult`。
-- `planning_policy.py` 对规划结果做规则兜底、默认时间范围、默认 task plan 和语义校验。
-- `planning_skill.py` 串联 prompt、LLM、parser、policy。
-- `review_skill.py` 在每个大阶段完成后做流程层准入审查。
-
-规划结果会写入 `WorkflowState`，核心字段包括 `task_type`、`company_name`、`ts_code`、`time_range`、`analysis_focus`、`output_mode`、`task_plan`、`missing_fields` 和 `next_step`。
-
-### Data 层
-
-Data 阶段拆成主 `DataAgent` 和确定性 DataSubgraph 节点：
-
-- `RequiredPartsSkill` 使用 LLM 判断需要哪些数据分片。
-- `CompanyProfileFetchSkill` 通过 `CompanyResolver` 获取公司画像。
-- `DataPreparationSkill` 按时间范围和分片查询本地库，必要时回源 TuShare 并 upsert。
-- `CompletenessCheckSkill` 检查请求期间内每个数据分片的报告期覆盖情况。
-- `BackfillPlanSkill` 根据完整性检查结果判断是否需要补拉缺失报告期。
-
-当前支持的数据分片：
-
-- `income_statements`
-- `balance_sheets`
-- `cashflow_statements`
-- `financial_indicators`
-
-### Analysis 层
-
-`AnalysisAgent` 分两阶段工作：
-
-1. ReAct 证据收集：根据用户问题、分析重点和可用数据，动态调用证据工具。
-2. Finalize：只基于已收集 evidence 生成结构化 `analysis_result`。
-
-已实现的证据工具包括：
-
-- `income_statement_evidence_tool`
-- `balance_sheet_evidence_tool`
-- `cashflow_statement_evidence_tool`
-- `fina_indicator_evidence_tool`
-- `cross_statement_evidence_tool`
-
-`analysis_result` 主要字段：
-
-- `status`
-- `summary`
-- `overall_score`
-- `dimensions`
-- `data_limitations`
-- `evidence`
-- `conclusion`
-
-### Report 层
-
-`ReportAgent` 基于 `analysis_result` 生成结构化 `report_result`，不重新计算指标、不新增财务事实、不覆盖 AnalysisAgent 的核心判断。
-
-`report_result` 主要字段：
-
-- `status`
-- `report_type`
-- `title`
-- `executive_summary`
-- `overall_assessment`
-- `sections`
-- `risk_warnings`
-- `data_limitations`
-- `conclusion`
-- `disclaimer`
-- `markdown_report`
-
-工作流会调用 `app/utils/report_file_writer.py`，将 `markdown_report` 保存为：
+当 `ReportAgent` 完成报告生成后，工作流调用 `app/utils/report_file_writer.py`，
+将 Markdown 文件写入：
 
 ```text
 outputs/reports/report_<报告标题>_<时间戳>.md
 ```
 
-### Reflection 层
+当前可确认落盘的是 Markdown 报告文件；`analysis_result` 和 `report_snapshot`
+的 Repository 仍是占位访问层，尚未接入主工作流持久化。
 
-`ReflectionAgent` 当前仍是最小实现：默认审查通过，并返回空 issue/suggestion。后续需要补充正式的报告质量检查、数据引用一致性检查和回退路由建议。
+## 🗂️ 项目结构
 
-### API 和 Tools
+```text
+FinancialAnalyst/
+├── app/
+│   ├── agents/              # Supervisor / Data / Analysis / Report / Reflection Agents
+│   ├── api/                 # FastAPI 路由与依赖
+│   ├── application/         # FinancialAnalysisRunner 应用层入口
+│   ├── core/                # 配置加载与数据库连接
+│   ├── domain/              # 规划、时间范围、完整性等领域对象
+│   ├── llms/                # OpenAI 兼容模型客户端
+│   ├── models/              # 请求响应 schema 与 SQLAlchemy ORM
+│   ├── repositories/        # 公司及财务数据访问层
+│   ├── services/            # TuShare 等服务；部分服务仍为早期占位
+│   ├── skills/
+│   │   ├── analysis/        # 财务证据工具与指标分组
+│   │   ├── capabilities/    # 公司解析、时间解析、完整性检查
+│   │   ├── data/            # 数据规划、读取、补数
+│   │   └── supervisor/      # 任务规划与阶段审查
+│   ├── utils/               # 报告文件写入等工具
+│   ├── workflows/
+│   │   ├── subgraphs/       # DataSubgraph 节点与路由
+│   │   ├── graph.py         # 主工作流与 checkpointer 接口
+│   │   ├── nodes.py         # 主阶段节点
+│   │   └── state.py         # WorkflowState 和状态辅助函数
+│   └── main.py              # FastAPI 应用入口
+├── docs/
+│   └── subagent_contracts.md
+├── outputs/reports/         # 运行时生成的 Markdown 报告
+├── scripts/                 # 初始化、检查、实验与 checkpoint 脚本
+├── tests/                   # 待建设的正式测试目录
+├── requirements.txt
+└── README.md
+```
 
-`app/api/` 当前只提供轻量路由/schema 占位，不是可直接启动的 FastAPI/Flask 服务。
+## 🧪 脚本说明
 
-`app/tools/` 中仍有部分早期占位函数，和当前 Agent 主链路不是完全同一套抽象，后续需要清理或并入正式技能层。
+| 脚本 | 用途 | 备注 |
+| --- | --- | --- |
+| `scripts/init_db.py` | 初始化业务表 | 面向空库，不是迁移工具 |
+| `scripts/test_planner.py` | 调用 LLM 验证规划结果 | 需要模型配置 |
+| `scripts/test_data_preparation_skill.py` | 验证公司解析和数据读取 | 需要数据库及 TuShare 配置 |
+| `scripts/test_data_preparation_flow.py` | 验证完整性检查和补数流程 | 可能写入数据库 |
+| `scripts/test_supervisor_data_analysis_nodes.py` | 完整真实链路检查 | 当前推荐的端到端入口 |
+| `scripts/test_checkpoint.py` | 内存 checkpoint 示例 | 依赖默认图装配修复后使用 |
+| `scripts/test_postgres_checkpoint.py` | PostgreSQL checkpoint 示例 | 包含固定示例连接串，使用前调整 |
+| `scripts/test_read_postgres_checkpoint.py` | 读取 PostgreSQL checkpoint | 包含固定示例连接串，使用前调整 |
+| `scripts/run_demo.py` | 早期演示入口 | 构造参数已落后于当前 Agents |
+| `scripts/test_supervisor_data_nodes.py` | 早期 Data 链路检查 | 构造参数已落后于当前 Agents |
+| `scripts/compute_metrics.py`、`seed_companies.py`、`sync_company_data.py` | 早期服务验证脚本 | 对应服务或 Repository 仍有占位实现 |
 
-## 开发状态
+## ⚠️ 已知限制
 
-已基本成型：
+- `app/workflows/graph.py` 默认构建路径仍以 `ReflectionAgent()` 初始化审查 Agent，
+  而当前实现要求传入 `llm_client`；因此默认 Runner、API 分析请求和依赖该默认路径的
+  checkpoint 示例在同步构造参数前不能作为可靠端到端入口。
+- `requirements.txt` 尚未纳入 FastAPI/Uvicorn 与 PostgreSQL checkpoint 的可选依赖。
+- `scripts/init_db.py` 没有迁移或幂等建表机制，ORM 变更后需人工管理 schema。
+- 分析和报告快照表已建模，但主流程目前只确认写出 Markdown 报告文件。
+- `tests/` 尚未形成正式的自动化测试套件；当前校验主要依赖 `scripts/` 中的真实集成脚本。
+- `.gitignore` 当前仅忽略 `.idea` 与 `.env`；运行后生成的 `__pycache__/` 和
+  `outputs/` 可能显示为未跟踪文件。
 
-- LangGraph 主工作流和 DataSubgraph
-- `WorkflowState` JSON-safe 状态收敛和执行历史记录
-- Supervisor 规划、规则兜底、阶段审查和路由
-- 数据分片规划、并行抓取、合并、完整性检查、回源补数
-- TuShare 标准化服务和 PostgreSQL Repository 层
-- 利润表、资产负债表、现金流、财务指标、跨报表诊断证据工具
-- Analysis ReAct tool-calling 和结构化分析输出
-- Report 结构化 JSON 和 Markdown 报告生成
-- Markdown 报告文件落盘
-- 真实集成检查脚本 `scripts/test_supervisor_data_analysis_nodes.py`
+## 🔐 使用注意
 
-仍需完善：
-
-- ReflectionAgent 的真实质量审查、问题归因和重试/回退策略
-- API 服务化入口
-- `analysis_result`、`report_snapshot` 等结果快照的工作流内持久化
-- 默认 `build_workflow_graph()` 和早期脚本的依赖注入一致性
-- 数据库 schema 迁移机制
-- `tests/` 下正式单元测试和集成测试体系
-- 早期 services/tools 与当前 Agent/Skill 主链路的抽象收敛
-
-## 注意事项
-
-- `.env` 包含数据库、TuShare 和大模型密钥，不要提交真实凭据。
-- 真实集成脚本会访问外部 LLM、数据库和 TuShare，运行成本和网络可用性需要自行确认。
-- `outputs/reports/` 是报告生成产物目录，不属于核心源码。
-- `__pycache__/` 和脚本输出文件可能在本地运行后出现，提交前应清理或加入忽略规则。
+- 不要提交包含真实数据库密码、TuShare Token 或模型 API Key 的 `.env`。
+- 项目输出属于模型辅助财务分析结果，不构成投资建议。
+- 真实链路会调用外部 LLM 与 TuShare，运行前应确认额度、网络及数据权限。
+- 报告中的结论应结合数据完整性、审查结果和适用的业务场景进行复核。
