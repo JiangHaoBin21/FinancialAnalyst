@@ -387,7 +387,7 @@ def build_workflow_graph(
                 supervisor_agent=SupervisorAgent(planning_skill=planning_skill, review_skill=review_skill),
                 analysis_agent=AnalysisAgent(llm_client=llm_client),
                 report_agent=ReportAgent(llm_client=llm_client),
-                reflection_agent=ReflectionAgent(),
+                reflection_agent=ReflectionAgent(llm_client=llm_client),
             )
 
         # =========================

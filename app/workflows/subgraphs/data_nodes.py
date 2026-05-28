@@ -259,9 +259,6 @@ class DataSubgraphNodes:
         financial_data = defaultdict(list)
         for result in results:
             financial_data[result["part_name"]].extend(result["payload"])
-
-            print("*" * 100)
-            print(type(result["payload"]))
         return {
             "financial_data": financial_data,
             "execution_history": [

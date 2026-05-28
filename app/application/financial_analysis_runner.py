@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from uuid import uuid4
 
 from app.workflows.state import WorkflowState, normalize_for_json
 
@@ -102,9 +103,16 @@ class FinancialAnalysisRunner:
         max_iterations: int = 20,
         enable_trace: bool = False,
         checkpointer: Any | None = None,
+        auto_create_tables: bool = True,
+        enable_postgres_checkpoint: bool = True,
+        checkpoint_conn_string: str | None = None,
     ) -> None:
         self._workflow_graph = workflow_graph
         self._graph_factory = graph_factory
+        self._auto_create_tables = auto_create_tables
+        self._enable_postgres_checkpoint = enable_postgres_checkpoint
+        self._checkpoint_conn_string = checkpoint_conn_string
+        self._default_checkpointer_context: Any | None = None
         self._graph_options = {
             "llm_client": llm_client,
             "nodes": nodes,
@@ -120,6 +128,7 @@ class FinancialAnalysisRunner:
         if self._workflow_graph is None:
             # 工作流图依赖数据库、LLM、TuShare 等外部配置，延迟到真正执行时再构建，
             # 避免导入本业务入口时就触发外部依赖初始化。
+            self._ensure_default_checkpointer()
             graph_factory = self._graph_factory or _default_graph_factory
             self._workflow_graph = graph_factory(**self._graph_options)
         return self._workflow_graph
@@ -131,9 +140,11 @@ class FinancialAnalysisRunner:
         thread_id: str | None = None,
     ) -> FinancialAnalysisResult:
         """基于用户问题启动一条新的财务分析工作流。"""
+        self._ensure_database_schema()
+        effective_thread_id = thread_id or f"financial-analysis-{uuid4().hex}"
         state = self.workflow_graph.run(
             user_query=self._normalize_user_query(user_query),
-            thread_id=thread_id,
+            thread_id=effective_thread_id,
         )
         return FinancialAnalysisResult.from_state(state)
 
@@ -179,6 +190,74 @@ class FinancialAnalysisRunner:
     def state_to_dict(state: WorkflowState) -> dict[str, Any]:
         """将原始工作流状态转换为适合传输或日志记录的 JSON 安全字典。"""
         return normalize_for_json(state)
+
+    def _ensure_database_schema(self) -> None:
+        if not self._auto_create_tables:
+            return
+
+        from app.core.database import engine
+        from app.models.db_models import Base
+
+        Base.metadata.create_all(bind=engine, checkfirst=True)
+
+    def _ensure_default_checkpointer(self) -> None:
+        if (
+            self._workflow_graph is not None
+            or self._graph_options.get("checkpointer") is not None
+            or not self._enable_postgres_checkpoint
+        ):
+            return
+
+        from app.core.config import settings
+
+        conn_string = self._normalize_postgres_conn_string(
+            self._checkpoint_conn_string or settings.database_url
+        )
+        if not conn_string:
+            raise ValueError(
+                "Postgres checkpoint is enabled, but no checkpoint_conn_string or DATABASE_URL is configured."
+            )
+
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+        except ImportError as exc:
+            raise ImportError(
+                "Postgres checkpoint is enabled by default. Install dependencies with "
+                "`pip install -r requirements.txt`, or pass enable_postgres_checkpoint=False."
+            ) from exc
+
+        context = PostgresSaver.from_conn_string(conn_string)
+        checkpointer = context.__enter__()
+        try:
+            checkpointer.setup()
+        except Exception:
+            context.__exit__(None, None, None)
+            raise
+
+        self._default_checkpointer_context = context
+        self._graph_options["checkpointer"] = checkpointer
+
+    def close(self) -> None:
+        if self._default_checkpointer_context is None:
+            return
+
+        self._default_checkpointer_context.__exit__(None, None, None)
+        self._default_checkpointer_context = None
+
+    @staticmethod
+    def _normalize_postgres_conn_string(conn_string: str | None) -> str | None:
+        if not conn_string:
+            return conn_string
+
+        driver_prefixes = (
+            "postgresql+psycopg2://",
+            "postgresql+psycopg://",
+        )
+        for prefix in driver_prefixes:
+            if conn_string.startswith(prefix):
+                return "postgresql://" + conn_string[len(prefix):]
+
+        return conn_string
 
     @staticmethod
     def _normalize_user_query(user_query: str) -> str:
