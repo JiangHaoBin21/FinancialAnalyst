@@ -13,14 +13,19 @@ app = FastAPI(
 )
 
 
-# 开发阶段先放开跨域，方便后续前端本地调试。
-# 正式部署时建议改成具体前端地址，例如 http://localhost:3000。
+# 开发阶段允许本地 Vite 前端访问。
+# 当前接口不依赖 Cookie，关闭 credentials 可避免浏览器拒绝通配 origin + credentials 的组合。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
