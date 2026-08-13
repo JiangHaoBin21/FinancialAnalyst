@@ -87,11 +87,7 @@ export interface FinancialAnalysisResponse {
 }
 
 export interface AnalysisFormPayload {
-  company: string;
-  year: string;
-  question: string;
-  focus: string;
-  includeState: boolean;
+  query: string;
 }
 
 export interface ApiErrorPayload {

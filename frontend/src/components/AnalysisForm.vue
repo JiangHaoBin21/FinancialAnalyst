@@ -1,173 +1,68 @@
 <script setup lang="ts">
-import { computed, reactive } from "vue";
-import {
-  BarChart3,
-  CalendarDays,
-  ChevronRight,
-  CircleDollarSign,
-  MessageSquareText,
-  Settings2,
-} from "lucide-vue-next";
+import { computed, ref } from "vue";
+import { ArrowUpRight, Command, Sparkles } from "lucide-vue-next";
 import type { AnalysisFormPayload } from "../types/financialAnalysis";
-
-const emit = defineEmits<{
-  submit: [payload: AnalysisFormPayload];
-}>();
 
 const props = defineProps<{
   loading?: boolean;
 }>();
 
-const focusOptions = ["综合分析", "盈利能力", "偿债能力", "现金流", "经营质量"];
+const emit = defineEmits<{
+  submit: [payload: AnalysisFormPayload];
+}>();
 
-const form = reactive<AnalysisFormPayload>({
-  company: "宁德时代",
-  year: "2023",
-  focus: "综合分析",
-  question: "请分析该公司的财务表现，并生成一份适合管理层阅读的财务分析报告。",
-  includeState: false,
-});
-
-const errors = reactive({
-  company: "",
-  year: "",
-  question: "",
-});
-
-const canSubmit = computed(() => !props.loading);
-
-function validate(): boolean {
-  errors.company = form.company.trim() ? "" : "请输入公司名称或股票代码";
-  errors.year = /^\d{4}$/.test(form.year.trim()) ? "" : "请输入 4 位年份";
-  errors.question = form.question.trim() ? "" : "请输入分析问题";
-
-  return !errors.company && !errors.year && !errors.question;
-}
+const query = ref("");
+const error = ref("");
+const canSubmit = computed(() => Boolean(query.value.trim()) && !props.loading);
 
 function handleSubmit() {
-  if (!validate() || props.loading) {
+  if (!query.value.trim()) {
+    error.value = "请先告诉我你想分析哪家公司，以及关注什么问题。";
     return;
   }
 
-  emit("submit", {
-    company: form.company.trim(),
-    year: form.year.trim(),
-    focus: form.focus,
-    question: form.question.trim(),
-    includeState: form.includeState,
-  });
+  if (props.loading) return;
+
+  error.value = "";
+  emit("submit", { query: query.value.trim() });
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    handleSubmit();
+  }
 }
 </script>
 
 <template>
-  <section class="glass-panel rounded-lg p-5 lg:p-6">
-    <div class="mb-5 flex items-center justify-between gap-4">
-      <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-200">
-          Task Console
-        </p>
-        <h2 class="mt-2 text-xl font-semibold text-white">创建分析任务</h2>
-      </div>
-      <div class="rounded-lg border border-teal-300/20 bg-teal-300/10 p-3 text-teal-100">
-        <Settings2 class="h-5 w-5" />
-      </div>
+  <form class="analysis-composer" @submit.prevent="handleSubmit">
+    <div class="composer-heading">
+      <span class="composer-icon"><Sparkles :size="18" /></span>
+      <span>开始一次深度分析</span>
     </div>
 
-    <form class="space-y-5" @submit.prevent="handleSubmit">
-      <label class="block">
-        <span class="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
-          <CircleDollarSign class="h-4 w-4 text-teal-300" />
-          公司名称或股票代码
-        </span>
-        <input
-          v-model="form.company"
-          class="w-full rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-300/70 focus:bg-white/[0.09]"
-          placeholder="例如：宁德时代 / 300750.SZ"
-          :disabled="loading"
-        />
-        <p v-if="errors.company" class="mt-2 text-xs text-rose-300">
-          {{ errors.company }}
-        </p>
-      </label>
+    <label class="sr-only" for="analysis-query">分析需求</label>
+    <textarea
+      id="analysis-query"
+      v-model="query"
+      rows="5"
+      :disabled="loading"
+      placeholder="例如：分析宁德时代 2023 年的盈利能力、现金流和主要风险，并给出面向管理层的结论。"
+      @keydown="handleKeydown"
+    />
 
-      <label class="block">
-        <span class="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
-          <CalendarDays class="h-4 w-4 text-cyan-300" />
-          年份
-        </span>
-        <input
-          v-model="form.year"
-          class="w-full rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/70 focus:bg-white/[0.09]"
-          placeholder="例如：2023"
-          inputmode="numeric"
-          :disabled="loading"
-        />
-        <p v-if="errors.year" class="mt-2 text-xs text-rose-300">
-          {{ errors.year }}
-        </p>
-      </label>
+    <p v-if="error" class="form-error">{{ error }}</p>
 
-      <div>
-        <span class="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
-          <BarChart3 class="h-4 w-4 text-amber-300" />
-          分析重点
-        </span>
-        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <button
-            v-for="option in focusOptions"
-            :key="option"
-            type="button"
-            class="rounded-lg border px-3 py-2 text-sm transition"
-            :class="
-              form.focus === option
-                ? 'border-teal-300/70 bg-teal-300/15 text-teal-50'
-                : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-white/20 hover:bg-white/[0.08]'
-            "
-            :disabled="loading"
-            @click="form.focus = option"
-          >
-            {{ option }}
-          </button>
-        </div>
-      </div>
-
-      <label class="block">
-        <span class="mb-2 flex items-center gap-2 text-sm font-medium text-slate-200">
-          <MessageSquareText class="h-4 w-4 text-emerald-300" />
-          分析问题
-        </span>
-        <textarea
-          v-model="form.question"
-          class="min-h-32 w-full resize-none rounded-lg border border-white/10 bg-white/[0.06] px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-300/70 focus:bg-white/[0.09]"
-          placeholder="请输入希望 Agent 回答的问题"
-          :disabled="loading"
-        />
-        <p v-if="errors.question" class="mt-2 text-xs text-rose-300">
-          {{ errors.question }}
-        </p>
-      </label>
-
-      <label class="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3">
-        <span>
-          <span class="block text-sm font-medium text-white">返回调试状态</span>
-          <span class="text-xs text-slate-400">用于开发联调，演示时可保持关闭</span>
-        </span>
-        <input
-          v-model="form.includeState"
-          type="checkbox"
-          class="h-5 w-5 rounded border-white/20 bg-transparent accent-teal-300"
-          :disabled="loading"
-        />
-      </label>
-
-      <button
-        type="submit"
-        class="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-300"
-        :disabled="!canSubmit"
-      >
-        <span>{{ loading ? "Agent 分析中" : "开始分析" }}</span>
-        <ChevronRight class="h-4 w-4" />
+    <div class="composer-footer">
+      <p class="composer-tip">
+        <Command :size="14" />
+        写明公司、报告期和关注点，结果会更准确
+      </p>
+      <button type="submit" class="primary-button" :disabled="!canSubmit">
+        <span>{{ loading ? "分析进行中" : "开始分析" }}</span>
+        <span class="button-icon"><ArrowUpRight :size="17" /></span>
       </button>
-    </form>
-  </section>
+    </div>
+  </form>
 </template>
