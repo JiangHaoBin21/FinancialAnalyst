@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any, Callable, Optional
 
 from app.core.database import SessionLocal
@@ -34,6 +35,29 @@ from app.workflows.subgraphs.data_graph import build_data_subgraph
 from app.workflows.subgraphs.data_nodes import DataSubgraphNodes
 
 
+STAGE_DISPLAY_NAMES = {
+    "supervisor_node": "Supervisor",
+    "await_user_input_node": "AwaitUserInput",
+    "_run_data_stage_once": "Data",
+    "data_planner_node": "Data/规划",
+    "prepare_company_context_node": "Data/公司解析",
+    "fetch_income_statement_node": "Data/利润表",
+    "fetch_balance_sheet_node": "Data/资产负债表",
+    "fetch_cashflow_statement_node": "Data/现金流量表",
+    "fetch_financial_indicator_node": "Data/财务指标",
+    "data_merge_node": "Data/合并",
+    "completeness_check_node": "Data/完整性检查",
+    "backfill_planner_node": "Data/回源规划",
+    "data_finalize_node": "Data/完成",
+    "data_error_node": "Data/错误",
+    "analysis_node": "Analysis",
+    "report_node": "Report",
+    "reflection_node": "Reflection",
+    "finish_node": "Finished",
+    "error_node": "Error",
+}
+
+
 class WorkflowGraph:
     """直接以 LangGraph 状态驱动的工作流门面。"""
 
@@ -50,16 +74,20 @@ class WorkflowGraph:
         self.max_iterations = max_iterations
         self.enable_trace = enable_trace
         self.checkpointer = checkpointer
+        self._compiled_data_subgraph = build_data_subgraph(
+            nodes=self.data_nodes,
+            wrap_node=self._wrap_node,
+        )
         # 单步执行时使用的步骤到节点函数映射。
         self._route_table: dict[str, Callable[[WorkflowState], dict]] = {
-            WorkflowStep.SUPERVISOR.value: self.nodes.supervisor_node,
-            WorkflowStep.AWAIT_USER_INPUT.value: self.nodes.await_user_input_node,
-            WorkflowStep.DATA.value: self._run_data_stage_once,
-            WorkflowStep.ANALYSIS.value: self.nodes.analysis_node,
-            WorkflowStep.REPORT.value: self.nodes.report_node,
-            WorkflowStep.REFLECTION.value: self.nodes.reflection_node,
-            WorkflowStep.FINISHED.value: self.nodes.finish_node,
-            WorkflowStep.ERROR.value: self.nodes.error_node,
+            WorkflowStep.SUPERVISOR.value: self._wrap_node(self.nodes.supervisor_node),
+            WorkflowStep.AWAIT_USER_INPUT.value: self._wrap_node(self.nodes.await_user_input_node),
+            WorkflowStep.DATA.value: self._wrap_node(self._run_data_stage_once),
+            WorkflowStep.ANALYSIS.value: self._wrap_node(self.nodes.analysis_node),
+            WorkflowStep.REPORT.value: self._wrap_node(self.nodes.report_node),
+            WorkflowStep.REFLECTION.value: self._wrap_node(self.nodes.reflection_node),
+            WorkflowStep.FINISHED.value: self._wrap_node(self.nodes.finish_node),
+            WorkflowStep.ERROR.value: self._wrap_node(self.nodes.error_node),
         }
         # 编译后的 LangGraph 供完整运行路径复用。
         self._compiled_graph = self._build_langgraph()
@@ -95,7 +123,8 @@ class WorkflowGraph:
                 **error_update(f"LangGraph execution failed: {type(exc).__name__}: {exc}"),
             }
             # 将运行异常收敛到统一错误节点，保持返回状态结构稳定。
-            return self._merge_state_update(failed_state, self.nodes.error_node(failed_state))
+            error_update_result = self._route_table[WorkflowStep.ERROR.value](failed_state)
+            return self._merge_state_update(failed_state, error_update_result)
 
     def resume_with_user_input(self, state: WorkflowState, user_input: str) -> WorkflowState:
         """用户补充缺失信息后恢复暂停的工作流。"""
@@ -146,12 +175,7 @@ class WorkflowGraph:
         return self._merge_state_update(state, node_fn(state))
 
     def _run_data_stage_once(self, state: WorkflowState) -> dict:
-        data_subgraph = build_data_subgraph(
-            nodes=self.data_nodes,
-            wrap_node=self._wrap_node,
-        )
-
-        result_state = data_subgraph.invoke(
+        result_state = self._compiled_data_subgraph.invoke(
             state,
             config={"recursion_limit": self._recursion_limit},
         )
@@ -187,19 +211,14 @@ class WorkflowGraph:
 
         builder = StateGraph(WorkflowState)
 
-        data_subgraph = build_data_subgraph(
-            nodes=self.data_nodes,
-            wrap_node=self._wrap_node,
-        )
-
-        builder.add_node("supervisor", self._wrap_node(self.nodes.supervisor_node))
-        builder.add_node("await_user_input", self._wrap_node(self.nodes.await_user_input_node))
-        builder.add_node("data_stage", data_subgraph)
-        builder.add_node("analysis", self._wrap_node(self.nodes.analysis_node))
-        builder.add_node("report", self._wrap_node(self.nodes.report_node))
-        builder.add_node("reflection", self._wrap_node(self.nodes.reflection_node))
-        builder.add_node("finished", self._wrap_node(self.nodes.finish_node))
-        builder.add_node("error", self._wrap_node(self.nodes.error_node))
+        builder.add_node("supervisor", self._route_table[WorkflowStep.SUPERVISOR.value])
+        builder.add_node("await_user_input", self._route_table[WorkflowStep.AWAIT_USER_INPUT.value])
+        builder.add_node("data_stage", self._route_table[WorkflowStep.DATA.value])
+        builder.add_node("analysis", self._route_table[WorkflowStep.ANALYSIS.value])
+        builder.add_node("report", self._route_table[WorkflowStep.REPORT.value])
+        builder.add_node("reflection", self._route_table[WorkflowStep.REFLECTION.value])
+        builder.add_node("finished", self._route_table[WorkflowStep.FINISHED.value])
+        builder.add_node("error", self._route_table[WorkflowStep.ERROR.value])
 
         builder.add_edge(START, "supervisor")
 
@@ -247,20 +266,59 @@ class WorkflowGraph:
         }
 
     def _wrap_node(self, node_fn: Callable[[WorkflowState], dict]) -> Callable[[WorkflowState], dict]:
-        """包装节点函数，在开启追踪时输出执行前后的状态摘要。"""
+        """包装节点函数，并在节点结束后输出本阶段耗时。"""
         def wrapped(state: WorkflowState) -> dict:
+            started_at = perf_counter()
             if self.enable_trace:
                 self._trace(state, prefix=f"[langgraph.before:{node_fn.__name__}]")
 
-            update = make_json_safe(node_fn(state))
+            try:
+                update = make_json_safe(node_fn(state))
+            except Exception:
+                self._print_stage_timing(
+                    node_name=node_fn.__name__,
+                    elapsed_seconds=perf_counter() - started_at,
+                    succeeded=False,
+                )
+                raise
 
             if self.enable_trace:
                 preview_state = self._merge_state_update(state, update)
                 self._trace(preview_state, prefix=f"[langgraph.after:{node_fn.__name__}]")
 
+            self._print_stage_timing(
+                node_name=node_fn.__name__,
+                elapsed_seconds=perf_counter() - started_at,
+                succeeded=self._stage_succeeded(state, update),
+            )
             return update
 
         return wrapped
+
+    @staticmethod
+    def _print_stage_timing(
+        *,
+        node_name: str,
+        elapsed_seconds: float,
+        succeeded: bool,
+    ) -> None:
+        """以统一格式将阶段耗时即时输出到控制台。"""
+        status = "完成" if succeeded else "失败"
+        display_name = STAGE_DISPLAY_NAMES.get(node_name, node_name)
+        print(
+            f"[阶段耗时] {display_name} {status}，耗时 {elapsed_seconds:.3f} 秒",
+            flush=True,
+        )
+
+    @staticmethod
+    def _stage_succeeded(state: WorkflowState, update: dict[str, Any]) -> bool:
+        """根据节点执行前后的错误信号判断计时日志状态。"""
+        has_error = bool(update.get("has_error", state.get("has_error", False)))
+        status = _enum_value(update.get("status", state.get("status")))
+        current_stage = _enum_value(
+            update.get("current_stage", state.get("current_stage"))
+        )
+        return not has_error and status != WorkflowStatus.ERROR.value and current_stage != WorkflowStep.ERROR.value
 
     def _route_after_node(self, state: WorkflowState) -> str:
         """根据节点执行后的状态选择下一条 LangGraph 边。"""

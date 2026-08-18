@@ -15,6 +15,7 @@ from app.workflows.state import (
     execution_record,
     fail_current_plan_step,
     is_current_plan_agent,
+    resolve_final_report,
     update_current_plan_step_status, mark_stage_attempt,
 )
 
@@ -128,14 +129,15 @@ class WorkflowNodes:
 
     def finish_node(self, state: WorkflowState) -> dict:
         """生成工作流完成状态。"""
-        final_response = state.get("final_report") or state.get("final_response")
+        final_report = resolve_final_report(state)
         message = state.get("assistant_message") or "Workflow finished."
         return {
             "current_stage": WorkflowStep.FINISHED.value,
             "status": WorkflowStatus.FINISHED.value,
             "next_step": WorkflowStep.FINISHED.value,
             "is_finished": True,
-            "final_response": final_response,
+            "final_report": final_report,
+            "final_response": final_report,
             "assistant_message": message,
             "execution_history": [
                 execution_record(
@@ -288,12 +290,22 @@ class WorkflowNodes:
             }
         elif node_step.value == "report":
             additional = {
-                "report_result": agent_update
+                "report_result": agent_update,
+                # 新报告只是待 Reflection 审查的草稿。重新生成报告时必须
+                # 作废上一轮的最终稿，避免后续错误交付旧修订版本。
+                "reflection_result": {},
+                "final_report": None,
+                "final_response": None,
             }
             save_markdown_report(report_result=agent_update, output_dir="outputs/reports", filename_prefix="report")
         elif node_step.value == "reflection":
             additional = {
-                "reflection_result": agent_update
+                "reflection_result": agent_update,
+                "final_report": _approved_report_after_reflection(
+                    state_for_agent,
+                    agent_update,
+                ),
+                "final_response": None,
             }
 
         return {
@@ -351,3 +363,27 @@ class WorkflowNodes:
 def _enum_value(value: Any) -> Any:
     """返回枚举的原始值；非枚举对象保持不变。"""
     return value.value if hasattr(value, "value") else value
+
+
+def _approved_report_after_reflection(
+    state: WorkflowState,
+    reflection_result: dict[str, Any],
+) -> Optional[str]:
+    """根据 Reflection 决策生成显式的最终交付报告。"""
+    decision = reflection_result.get("decision")
+
+    if decision == "pass_with_minor_revision":
+        revised_report = reflection_result.get("final_report_markdown")
+        if isinstance(revised_report, str) and revised_report.strip():
+            return revised_report
+        return None
+
+    if decision == "pass":
+        report_result = state.get("report_result")
+        if isinstance(report_result, dict):
+            report_draft = report_result.get("markdown_report")
+            if isinstance(report_draft, str) and report_draft.strip():
+                return report_draft
+
+    # 需要回到上游阶段或 Reflection 结果无效时，不保留旧的最终稿。
+    return None

@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "source_case_ids": [
+    "pilot_002_byd_growth",
+    "pilot_004_midea_solvency",
+    "pilot_007_longi_risk",
+    "pilot_009_catl_investment_boundary",
+    "pilot_010_byd_investment_boundary"
+  ],
+  "mutations": [
+    {"type":"clean_control","expected_issue_types":[],"acceptable_decisions":["pass"],"expected_route":"finished"},
+    {"type":"unsupported_claim","expected_issue_types":["unsupported_claim"],"acceptable_decisions":["needs_report_regeneration"],"expected_route":"report"},
+    {"type":"overstatement","expected_issue_types":["overstatement"],"acceptable_decisions":["pass_with_minor_revision","needs_report_regeneration"],"expected_route":["finished","report"]},
+    {"type":"direct_investment_instruction","expected_issue_types":["overstatement","insufficient_risk_disclosure"],"acceptable_decisions":["pass_with_minor_revision","needs_report_regeneration"],"expected_route":["finished","report"]},
+    {"type":"data_limitation_missing","expected_issue_types":["data_limitation_missing"],"acceptable_decisions":["pass_with_minor_revision","needs_report_regeneration"],"expected_route":["finished","report"]},
+    {"type":"company_info_error","expected_issue_types":["company_info_error"],"acceptable_decisions":["needs_report_regeneration"],"expected_route":"report"},
+    {"type":"missing_user_intent","expected_issue_types":["missing_user_intent"],"acceptable_decisions":["needs_report_regeneration"],"expected_route":"report"},
+    {"type":"missing_analysis_focus","expected_issue_types":["missing_analysis_focus"],"acceptable_decisions":["needs_report_regeneration","needs_analysis_revision"],"expected_route":["report","analysis"]},
+    {"type":"structure_or_readability","expected_issue_types":["structure_or_readability_issue"],"acceptable_decisions":["pass_with_minor_revision","needs_report_regeneration"],"expected_route":["finished","report"]},
+    {"type":"input_invalid","expected_issue_types":["input_invalid"],"acceptable_decisions":["failed"],"expected_route":"error"}
+  ]
+}

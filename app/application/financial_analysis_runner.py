@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import uuid4
 
-from app.workflows.state import WorkflowState, normalize_for_json
+from app.workflows.state import WorkflowState, normalize_for_json, resolve_final_report
 
 
 GraphFactory = Callable[..., Any]
@@ -39,13 +39,9 @@ class FinancialAnalysisResult:
         """从原始工作流状态中提取适合接口或命令行返回的结果。"""
         report_result = _dict_or_empty(state.get("report_result"))
 
-        # 最终报告优先使用工作流显式产物；如果没有，则回退到 report_result
-        # 中的 Markdown 报告，再回退到历史兼容字段 final_response。
-        final_report = (
-            state.get("final_report")
-            or report_result.get("markdown_report")
-            or state.get("final_response")
-        )
+        # 与 Finished 节点共享同一套交付解析规则，避免接口层再次回退到
+        # Reflection 修订前的 Report 草稿。
+        final_report = resolve_final_report(state)
 
         return cls(
             status=_optional_str(state.get("status")),

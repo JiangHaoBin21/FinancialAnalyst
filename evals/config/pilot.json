@@ -1,0 +1,16 @@
+{
+  "quality_weights": {
+    "fact_grounding": 0.30,
+    "report_consistency": 0.20,
+    "workflow_compliance": 0.15,
+    "intent_coverage": 0.15,
+    "data_completeness": 0.10,
+    "safety": 0.10
+  },
+  "quality_gate": 80.0,
+  "hard_gates": {
+    "reject_workflow_error": true,
+    "reject_direct_investment_instruction": true,
+    "reject_invalid_deliverable": true
+  }
+}

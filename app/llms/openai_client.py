@@ -58,6 +58,9 @@ class OpenAIClient(BaseLLMClient):
 
         self.client = OpenAI(**client_kwargs)
         self.model = self.config.model
+        # 保留最近一次 provider 返回的 usage，供评测/观测层读取。
+        # generate/chat 的业务返回值保持不变，现有 Agent 不需要感知该字段。
+        self.last_usage: dict[str, Any] = {}
 
     def generate(self, messages: list[dict[str, str]], tools: list = None, **kwargs: Any):
         """
@@ -84,6 +87,7 @@ class OpenAIClient(BaseLLMClient):
         if not messages:
             raise ValueError("messages 不能为空")
 
+        self.last_usage = {}
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -92,6 +96,8 @@ class OpenAIClient(BaseLLMClient):
             )
         except Exception as e:
             raise LLMClientError(f"OpenAI 调用失败: {str(e)}") from e
+
+        self.last_usage = self._extract_usage(response)
 
         try:
             content = response.choices[0].message.content
@@ -116,6 +122,7 @@ class OpenAIClient(BaseLLMClient):
         if not messages:
             raise ValueError("messages 不能为空")
 
+        self.last_usage = {}
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -128,6 +135,8 @@ class OpenAIClient(BaseLLMClient):
         except Exception as e:
             raise LLMClientError(f"OpenAI 调用失败: {str(e)}") from e
 
+        self.last_usage = self._extract_usage(response)
+
         try:
             content = response.choices[0].message
         except Exception as e:
@@ -137,3 +146,43 @@ class OpenAIClient(BaseLLMClient):
             return ""
 
         return content
+
+    def _extract_usage(self, response: Any) -> dict[str, Any]:
+        """将 OpenAI/兼容服务的 usage 规范化为稳定的普通字典。"""
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {}
+
+        def value(name: str, default: int = 0) -> int:
+            raw = getattr(usage, name, None)
+            if raw is None and isinstance(usage, dict):
+                raw = usage.get(name)
+            try:
+                return int(raw or default)
+            except (TypeError, ValueError):
+                return default
+
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+
+        def detail(container: Any, name: str) -> int:
+            if container is None:
+                return 0
+            raw = container.get(name) if isinstance(container, dict) else getattr(container, name, 0)
+            try:
+                return int(raw or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        prompt_tokens = value("prompt_tokens")
+        completion_tokens = value("completion_tokens")
+        cached_tokens = detail(prompt_details, "cached_tokens") or value("prompt_cache_hit_tokens")
+        reasoning_tokens = detail(completion_details, "reasoning_tokens") or value("reasoning_tokens")
+        return {
+            "model": self.model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": value("total_tokens") or prompt_tokens + completion_tokens,
+            "cached_prompt_tokens": cached_tokens,
+            "reasoning_tokens": reasoning_tokens,
+        }

@@ -355,6 +355,66 @@ def error_update(message: str) -> dict[str, Any]:
     }
 
 
+def resolve_final_report(state: WorkflowState) -> Optional[str]:
+    """解析当前状态中应交付给用户的最终 Markdown 报告。
+
+    ``final_report`` 是新的显式交付字段。兼容旧 checkpoint 时，如果
+    Reflection 已经给出轻量修订稿但尚未提升到该字段，也会读取嵌套在
+    ``reflection_result.final_report_markdown`` 中的完整报告。
+    """
+    reflection_result = state.get("reflection_result")
+    if isinstance(reflection_result, dict):
+        decision = reflection_result.get("decision")
+        if decision == "pass_with_minor_revision":
+            # 轻量修订必须交付修订后的完整正文；字段缺失时不能静默
+            # 回退到 Reflection 已判定需要修改的原稿。
+            return (
+                _non_empty_string(state.get("final_report"))
+                or _non_empty_string(
+                    reflection_result.get("final_report_markdown")
+                )
+            )
+
+        if decision == "pass":
+            final_report = _non_empty_string(state.get("final_report"))
+            if final_report is not None:
+                return final_report
+
+            report_result = state.get("report_result")
+            if isinstance(report_result, dict):
+                return _non_empty_string(report_result.get("markdown_report"))
+
+            return None
+
+        if decision in {
+            "needs_report_regeneration",
+            "needs_analysis_revision",
+            "needs_more_data",
+            "failed",
+        }:
+            # Reflection 尚未批准交付，旧报告或旧 final_response 都不能
+            # 被当成最终报告返回。
+            return None
+
+    final_report = _non_empty_string(state.get("final_report"))
+    if final_report is not None:
+        return final_report
+
+    report_result = state.get("report_result")
+    if isinstance(report_result, dict):
+        report_draft = _non_empty_string(report_result.get("markdown_report"))
+        if report_draft is not None:
+            return report_draft
+
+    return _non_empty_string(state.get("final_response"))
+
+
+def _non_empty_string(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
 def normalize_for_json(obj: Any) -> Any:
     """递归转换 dataclass 和枚举，生成 JSON 友好的对象。"""
     return make_json_safe(obj)
